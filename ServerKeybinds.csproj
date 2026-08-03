@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ServerKeybinds</AssemblyName>
+    <RootNamespace>ServerKeybinds</RootNamespace>
+    <!-- Shared LIBRARY (not a LabAPI plugin): deploy to %APPDATA%\SCP Secret Laboratory\LabAPI\dependencies\global
+         so it loads once, before any plugin, into the single AppDomain (one shared static registry). -->
+    <SCP_SL_MANAGED Condition="'$(SCP_SL_MANAGED)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</SCP_SL_MANAGED>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp" HintPath="$(SCP_SL_MANAGED)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="Assembly-CSharp-firstpass" HintPath="$(SCP_SL_MANAGED)\Assembly-CSharp-firstpass.dll" Private="false" />
+    <Reference Include="CommandSystem.Core" HintPath="$(SCP_SL_MANAGED)\CommandSystem.Core.dll" Private="false" />
+    <Reference Include="LabApi" HintPath="$(SCP_SL_MANAGED)\LabApi.dll" Private="false" />
+    <Reference Include="Mirror" HintPath="$(SCP_SL_MANAGED)\Mirror.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(SCP_SL_MANAGED)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(SCP_SL_MANAGED)\UnityEngine.CoreModule.dll" Private="false" />
+  </ItemGroup>
+
+  <!-- Auto-deploy the built DLL over its existing copies on the local LabAPI server (see Deploy.targets). -->
+  <PropertyGroup>
+    <_DeployTargetsFile>$([MSBuild]::GetPathOfFileAbove('Deploy.targets', '$(MSBuildProjectDirectory)'))</_DeployTargetsFile>
+  </PropertyGroup>
+  <Import Project="$(_DeployTargetsFile)" Condition="'$(_DeployTargetsFile)' != ''" />
+</Project>
