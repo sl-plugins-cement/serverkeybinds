@@ -7,7 +7,7 @@
     <AssemblyName>ServerKeybinds</AssemblyName>
     <RootNamespace>ServerKeybinds</RootNamespace>
     <!-- Shared LIBRARY (not a LabAPI plugin): deploy to %APPDATA%\SCP Secret Laboratory\LabAPI\dependencies\global
-         so it loads once, before any plugin, into the single AppDomain (one shared static registry). -->
+         so it loads once into the single AppDomain (one shared keybind/dropdown/slider registry). -->
     <SCP_SL_MANAGED Condition="'$(SCP_SL_MANAGED)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</SCP_SL_MANAGED>
   </PropertyGroup>
 

@@ -10,9 +10,9 @@ using Logger = LabApi.Features.Console.Logger;
 namespace ServerKeybinds;
 
 /// <summary>
-/// The single, process-wide registry for SCP:SL Server-Specific-Settings keybinds, shared by every
+/// The single, process-wide registry for SCP:SL Server-Specific Settings, shared by every
 /// plugin on the server. It exists because <see cref="ServerSpecificSettingsSync.DefinedSettings"/> is one
-/// static array shared by ALL plugins: registering keybinds independently (as plugins used to) means rival
+/// static array shared by ALL plugins: registering settings independently (as plugins used to) means rival
 /// merge paths that drop or duplicate each other's entries and risk id collisions. This type owns ONE merge
 /// path, ONE pair of event subscriptions, and a fixed <see cref="SssIdBlocks"/> allocation so ids never collide.
 ///
@@ -25,20 +25,22 @@ namespace ServerKeybinds;
 /// // block.Disable();  // in Plugin.Disable
 /// </code>
 ///
-/// This ships as a dependency LIBRARY (deployed to LabAPI's <c>dependencies/global</c>), so it loads exactly
+/// API 2 owns keybinds, dropdowns, and sliders. This ships as a dependency LIBRARY (deployed to LabAPI's <c>dependencies/global</c>), so it loads exactly
 /// once before any plugin and its statics are shared. A plugin that hard-references it but is missing the DLL
 /// fails to load entirely rather than running half-broken.
 /// </summary>
 public static class KeybindRegistry
 {
     /// <summary>Bumped on any breaking change to this API; consumers can assert it in their Enable.</summary>
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     private static readonly Dictionary<int, KeybindBlock> Blocks = new();
-    private static readonly Dictionary<int, KeybindBlock.Binding> ActiveBindings = new();
+    private static readonly Dictionary<int, ActiveBinding> ActiveBindings = new();
+    private static readonly Dictionary<int, ActiveValueSetting> ActiveValueSettings = new();
     private static readonly Dictionary<ReferenceHub, HashSet<int>> Pressed = new();
     private static readonly HashSet<int> WarnedForeignIds = new();
     private static bool _subscribed;
+    private static Predicate<ReferenceHub>? _previousJoinFilter;
 
     /// <summary>
     /// Claims the 1000-wide id block based at <paramref name="baseId"/> (use a <see cref="SssIdBlocks"/> constant).
@@ -136,6 +138,7 @@ public static class KeybindRegistry
 
         List<ServerSpecificSettingBase> ours = new();
         ActiveBindings.Clear();
+        ActiveValueSettings.Clear();
         foreach (KeybindBlock block in Blocks.Values)
         {
             if (!block.Active)
@@ -146,7 +149,11 @@ public static class KeybindRegistry
             ours.AddRange(block.BuildSettings());
             foreach (KeyValuePair<int, KeybindBlock.Binding> pair in block.Bindings)
             {
-                ActiveBindings[block.BaseId + pair.Key] = pair.Value;
+                ActiveBindings[block.BaseId + pair.Key] = new ActiveBinding(block, pair.Value);
+            }
+            foreach (KeyValuePair<int, KeybindBlock.ValueSetting> pair in block.ValueSettings)
+            {
+                ActiveValueSettings[block.BaseId + pair.Key] = new ActiveValueSetting(block, pair.Value);
             }
         }
 
@@ -156,7 +163,54 @@ public static class KeybindRegistry
             .Where(setting => !ownedIds.Contains(setting.SettingId))
             .Concat(ours)
             .ToArray();
-        ServerSpecificSettingsSync.SendToAll();
+        SendPersonalizedToAll();
+    }
+
+    /// <summary>Immediately re-sends the caller-specific visible settings collection to one player.</summary>
+    public static void RefreshPlayer(Player player)
+    {
+        if (player == null || player.IsDestroyed || !player.IsPlayer || !player.IsReady)
+        {
+            return;
+        }
+
+        SendPersonalized(player);
+    }
+
+    private static void SendPersonalizedToAll()
+    {
+        foreach (Player player in Player.ReadyList)
+        {
+            if (player.IsPlayer && player.IsReady)
+            {
+                SendPersonalized(player);
+            }
+        }
+    }
+
+    private static void SendPersonalized(Player player)
+    {
+        HashSet<int> allOwnedIds = new();
+        foreach (KeybindBlock block in Blocks.Values)
+        {
+            foreach (int id in block.OwnedIds())
+            {
+                allOwnedIds.Add(id);
+            }
+        }
+
+        List<ServerSpecificSettingBase> collection = (ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
+            .Where(setting => !allOwnedIds.Contains(setting.SettingId))
+            .ToList();
+        foreach (KeybindBlock block in Blocks.Values)
+        {
+            if (block.Active && block.IsVisibleTo(player))
+            {
+                collection.AddRange(block.BuildSettings());
+            }
+        }
+
+        ServerSpecificSettingsSync.SendToPlayer(player.ReferenceHub, collection.ToArray());
     }
 
     private static void WarnOnForeignCollisions(ServerSpecificSettingBase[] existingSettings, HashSet<int> ownedIds)
@@ -190,6 +244,8 @@ public static class KeybindRegistry
         }
 
         _subscribed = true;
+        _previousJoinFilter = ServerSpecificSettingsSync.SendOnJoinFilter;
+        ServerSpecificSettingsSync.SendOnJoinFilter = SuppressNativeJoinSend;
         ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnSettingValueReceived;
         PlayerAuthenticationManager.OnInstanceModeChanged += OnInstanceModeChanged;
     }
@@ -202,6 +258,11 @@ public static class KeybindRegistry
         }
 
         _subscribed = false;
+        if (ServerSpecificSettingsSync.SendOnJoinFilter == SuppressNativeJoinSend)
+        {
+            ServerSpecificSettingsSync.SendOnJoinFilter = _previousJoinFilter;
+        }
+        _previousJoinFilter = null;
         ServerSpecificSettingsSync.ServerOnSettingValueReceived -= OnSettingValueReceived;
         PlayerAuthenticationManager.OnInstanceModeChanged -= OnInstanceModeChanged;
         Pressed.Clear();
@@ -209,7 +270,26 @@ public static class KeybindRegistry
 
     private static void OnSettingValueReceived(ReferenceHub hub, ServerSpecificSettingBase setting)
     {
-        if (setting is not SSKeybindSetting keybind || !ActiveBindings.TryGetValue(setting.SettingId, out KeybindBlock.Binding binding))
+        if (ActiveValueSettings.TryGetValue(setting.SettingId, out ActiveValueSetting activeValue))
+        {
+            Player? valuePlayer = Player.Get(hub);
+            if (valuePlayer == null || !activeValue.Block.IsVisibleTo(valuePlayer))
+            {
+                return;
+            }
+
+            try
+            {
+                activeValue.Setting.Invoke(valuePlayer, setting);
+            }
+            catch (Exception exception)
+            {
+                Logger.Warn($"[ServerKeybinds] '{activeValue.Setting.Label}' change handler threw: {exception.GetBaseException().Message}");
+            }
+            return;
+        }
+
+        if (setting is not SSKeybindSetting keybind || !ActiveBindings.TryGetValue(setting.SettingId, out ActiveBinding activeBinding))
         {
             return;
         }
@@ -226,7 +306,7 @@ public static class KeybindRegistry
         {
             if (pressed.Remove(setting.SettingId))
             {
-                Invoke(binding, hub, released: true);
+                Invoke(activeBinding, hub, released: true);
             }
 
             return;
@@ -237,10 +317,10 @@ public static class KeybindRegistry
             return;
         }
 
-        Invoke(binding, hub, released: false);
+        Invoke(activeBinding, hub, released: false);
     }
 
-    private static void Invoke(KeybindBlock.Binding binding, ReferenceHub hub, bool released)
+    private static void Invoke(ActiveBinding active, ReferenceHub hub, bool released)
     {
         Player? player = Player.Get(hub);
         if (player == null)
@@ -248,6 +328,12 @@ public static class KeybindRegistry
             return;
         }
 
+        if (!active.Block.IsVisibleTo(player))
+        {
+            return;
+        }
+
+        KeybindBlock.Binding binding = active.Binding;
         Action<Player>? handler = released ? binding.OnReleased : binding.OnPressed;
         if (handler == null)
         {
@@ -276,6 +362,11 @@ public static class KeybindRegistry
             return;
         }
 
+        if (_previousJoinFilter != null && !_previousJoinFilter(hub))
+        {
+            return;
+        }
+
         Timing.CallDelayed(0.75f, () =>
         {
             if (!_subscribed || hub == null || hub.connectionToClient == null)
@@ -285,7 +376,11 @@ public static class KeybindRegistry
 
             try
             {
-                ServerSpecificSettingsSync.SendToPlayer(hub);
+                Player? player = Player.Get(hub);
+                if (player != null)
+                {
+                    SendPersonalized(player);
+                }
             }
             catch (Exception exception)
             {
@@ -299,5 +394,33 @@ public static class KeybindRegistry
         string binds = string.Join(", ", block.Bindings.Values
             .Select(b => $"{block.BaseId + b.Local}:{b.Label}({b.DefaultKey})"));
         Logger.Info($"[ServerKeybinds] '{block.Owner}' enabled block {block.BaseId} [{binds}].");
+    }
+
+    private static bool SuppressNativeJoinSend(ReferenceHub _) => false;
+
+    private readonly struct ActiveBinding
+    {
+        public ActiveBinding(KeybindBlock block, KeybindBlock.Binding binding)
+        {
+            Block = block;
+            Binding = binding;
+        }
+
+        public KeybindBlock Block { get; }
+
+        public KeybindBlock.Binding Binding { get; }
+    }
+
+    private readonly struct ActiveValueSetting
+    {
+        public ActiveValueSetting(KeybindBlock block, KeybindBlock.ValueSetting setting)
+        {
+            Block = block;
+            Setting = setting;
+        }
+
+        public KeybindBlock Block { get; }
+
+        public KeybindBlock.ValueSetting Setting { get; }
     }
 }

@@ -29,6 +29,12 @@ public static class SssIdBlocks
     /// <summary>goc-nuke: reserved for future ability keybinds (none today).</summary>
     public const int GocNuke = 1100000;
 
+    /// <summary>SpinBot observer-only spin toggle and tuning controls.</summary>
+    public const int SpinBot = 1110000;
+
+    /// <summary>InvincibleWarMark active ability keybind.</summary>
+    public const int InvincibleWarMark = 1120000;
+
     // --- Config-driven toggle plugins (documented here so new blocks never land on them) ---
 
     /// <summary>global-music-player mute toggle (currently 24000/24001).</summary>
