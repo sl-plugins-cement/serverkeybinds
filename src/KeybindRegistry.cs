@@ -184,7 +184,7 @@ public static class KeybindRegistry
     /// plugins happened to load in. One category header is emitted the first time that category appears, and
     /// a category with no included block emits nothing.
     /// </summary>
-    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include)
+    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include, Player? player = null)
     {
         SettingsCategory? current = null;
         foreach (KeybindBlock block in Blocks.Values
@@ -199,7 +199,7 @@ public static class KeybindRegistry
                 yield return new SSGroupHeader(SssIdBlocks.CategoryHeaderId(block.Category), CategoryLabel(block.Category));
             }
 
-            foreach (ServerSpecificSettingBase setting in block.BuildSettings())
+            foreach (ServerSpecificSettingBase setting in block.BuildSettings(player))
             {
                 yield return setting;
             }
@@ -280,6 +280,22 @@ public static class KeybindRegistry
         SendPersonalizedToAll();
     }
 
+    /// <summary>
+    /// The starting position a two-button setting hands <paramref name="player"/>, or null when that id is
+    /// not a registry-owned two-button setting. Consumers compare the value they RECEIVE against this to
+    /// tell an explicit choice from an untouched default - the client reports its value on acquisition as
+    /// well as on change, so a callback alone proves nothing.
+    /// </summary>
+    public static bool? DefaultTwoButtonsFor(Player player, int settingId)
+    {
+        if (player == null || !ActiveValueSettings.TryGetValue(settingId, out ActiveValueSetting active))
+        {
+            return null;
+        }
+
+        return active.Setting is KeybindBlock.TwoButtonsSetting twoButtons ? twoButtons.DefaultFor(player) : null;
+    }
+
     /// <summary>Immediately re-sends the caller-specific visible settings collection to one player.</summary>
     public static void RefreshPlayer(Player player)
     {
@@ -316,7 +332,7 @@ public static class KeybindRegistry
         // Ordered per RECIPIENT, not once globally: a category whose only block is hidden from this player
         // must not leave a dangling header behind for them. Ours lead here too, matching Rebuild.
         List<ServerSpecificSettingBase> collection =
-            BuildOrdered(block => block.Active && block.IsVisibleTo(player)).ToList();
+            BuildOrdered(block => block.Active && block.IsVisibleTo(player), player).ToList();
         collection.AddRange((ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
             .Where(setting => !allOwnedIds.Contains(setting.SettingId)));
 

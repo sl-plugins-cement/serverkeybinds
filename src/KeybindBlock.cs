@@ -192,6 +192,52 @@ public sealed class KeybindBlock
         return this;
     }
 
+    /// <summary>
+    /// A two-button toggle whose STARTING POSITION is decided per player.
+    ///
+    /// <c>DefaultIsB</c> is written into the entry by <c>SSTwoButtonsSetting.SerializeEntry</c>, and the
+    /// registry rebuilds its entries for every personalised send, so each player can be given a different
+    /// default. That is what lets a setting be "on for newcomers, off for everyone else" while still being
+    /// a switch either of them can flip - which a fixed default cannot express.
+    ///
+    /// The resolver runs once per send per player, so keep it cheap and side-effect free. It is not called
+    /// for the shared <c>DefinedSettings</c> array, which uses <paramref name="fallbackIsB"/>; players never
+    /// receive that array (the registry suppresses the native join send and pushes a personalised one), so
+    /// the fallback only shapes what other plugins see when they read the array.
+    ///
+    /// NOTE the client reports its value on ACQUISITION as well as on change, so a callback is not proof
+    /// the player touched anything. To tell an explicit choice from an untouched default, compare the value
+    /// you receive against the default you handed that player.
+    /// </summary>
+    public KeybindBlock AddTwoButtons(
+        int local,
+        string label,
+        string optionA,
+        string optionB,
+        Func<Player, bool> defaultIsBFor,
+        bool fallbackIsB,
+        string hint,
+        Action<Player, bool> onChanged)
+    {
+        ValidateAvailableValueLocal(local);
+        if (string.IsNullOrEmpty(optionA) || string.IsNullOrEmpty(optionB))
+        {
+            throw new ArgumentException("Both button captions must be non-empty.", nameof(optionA));
+        }
+
+        ValueSettings[local] = new TwoButtonsSetting(
+            local,
+            label,
+            optionA,
+            optionB,
+            fallbackIsB,
+            defaultIsBFor ?? throw new ArgumentNullException(nameof(defaultIsBFor)),
+            hint,
+            onChanged);
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
     /// <summary>Registers a shared-registry slider and invokes <paramref name="onChanged"/> with its validated value.</summary>
     public KeybindBlock AddSlider(
         int local,
@@ -231,7 +277,11 @@ public sealed class KeybindBlock
     /// <summary>Removes this block's settings from the shared <c>DefinedSettings</c> and broadcasts.</summary>
     public void Disable() => KeybindRegistry.DisableBlock(this);
 
-    internal IEnumerable<ServerSpecificSettingBase> BuildSettings()
+    /// <param name="player">
+    /// The recipient, when this is a personalised send. Null for the shared array, where any per-player
+    /// default falls back to its fixed value.
+    /// </param>
+    internal IEnumerable<ServerSpecificSettingBase> BuildSettings(Player? player = null)
     {
         foreach (HeaderEntry header in Headers)
         {
@@ -259,7 +309,7 @@ public sealed class KeybindBlock
 
         foreach (ValueSetting setting in ValueSettings.Values)
         {
-            yield return setting.Build(BaseId + setting.Local);
+            yield return setting.Build(BaseId + setting.Local, player);
         }
     }
 
@@ -395,7 +445,7 @@ public sealed class KeybindBlock
 
         protected string Hint { get; }
 
-        public abstract ServerSpecificSettingBase Build(int absoluteId);
+        public abstract ServerSpecificSettingBase Build(int absoluteId, Player? player);
 
         public abstract void Invoke(Player player, ServerSpecificSettingBase setting);
     }
@@ -416,7 +466,7 @@ public sealed class KeybindBlock
             _onChanged = onChanged;
         }
 
-        public override ServerSpecificSettingBase Build(int absoluteId) =>
+        public override ServerSpecificSettingBase Build(int absoluteId, Player? player) =>
             new SSDropdownSetting(absoluteId, Label, _options, _defaultIndex, _entryType, Hint);
 
         public override void Invoke(Player player, ServerSpecificSettingBase setting)
@@ -428,24 +478,51 @@ public sealed class KeybindBlock
         }
     }
 
-    private sealed class TwoButtonsSetting : ValueSetting
+    internal sealed class TwoButtonsSetting : ValueSetting
     {
         private readonly string _optionA;
         private readonly string _optionB;
         private readonly bool _defaultIsB;
         private readonly Action<Player, bool> _onChanged;
 
+        private readonly Func<Player, bool>? _defaultIsBFor;
+
         public TwoButtonsSetting(int local, string label, string optionA, string optionB, bool defaultIsB, string hint, Action<Player, bool> onChanged)
+            : this(local, label, optionA, optionB, defaultIsB, null, hint, onChanged)
+        {
+        }
+
+        public TwoButtonsSetting(int local, string label, string optionA, string optionB, bool defaultIsB, Func<Player, bool>? defaultIsBFor, string hint, Action<Player, bool> onChanged)
             : base(local, label, hint)
         {
             _optionA = optionA;
             _optionB = optionB;
             _defaultIsB = defaultIsB;
+            _defaultIsBFor = defaultIsBFor;
             _onChanged = onChanged;
         }
 
-        public override ServerSpecificSettingBase Build(int absoluteId) =>
-            new SSTwoButtonsSetting(absoluteId, Label, _optionA, _optionB, _defaultIsB, Hint);
+        /// <summary>The starting position this player should be sent, or the fixed one for the shared array.</summary>
+        public bool DefaultFor(Player? player)
+        {
+            if (_defaultIsBFor == null || player == null)
+            {
+                return _defaultIsB;
+            }
+
+            try
+            {
+                return _defaultIsBFor(player);
+            }
+            catch
+            {
+                // A throwing resolver must not cost the player the whole settings array.
+                return _defaultIsB;
+            }
+        }
+
+        public override ServerSpecificSettingBase Build(int absoluteId, Player? player) =>
+            new SSTwoButtonsSetting(absoluteId, Label, _optionA, _optionB, DefaultFor(player), Hint);
 
         public override void Invoke(Player player, ServerSpecificSettingBase setting)
         {
@@ -478,7 +555,7 @@ public sealed class KeybindBlock
             _onChanged = onChanged;
         }
 
-        public override ServerSpecificSettingBase Build(int absoluteId) =>
+        public override ServerSpecificSettingBase Build(int absoluteId, Player? player) =>
             new SSSliderSetting(absoluteId, Label, _min, _max, _defaultValue, _integer, _valueFormat, _displayFormat, Hint);
 
         public override void Invoke(Player player, ServerSpecificSettingBase setting)
