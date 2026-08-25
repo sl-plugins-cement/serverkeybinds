@@ -71,6 +71,16 @@ public static class KeybindRegistry
     private static readonly Dictionary<int, ActiveBinding> ActiveBindings = new();
     private static readonly Dictionary<int, ActiveValueSetting> ActiveValueSettings = new();
     private static readonly Dictionary<ReferenceHub, HashSet<int>> Pressed = new();
+
+    /// <summary>
+    /// The two-button default each player was ACTUALLY sent, keyed by player id then setting id.
+    ///
+    /// Recorded at serialisation rather than recomputed on demand. A per-player default is a function of
+    /// live state - playtime, role, permissions - so asking the resolver again later can return a different
+    /// answer than the one on the player's screen, and a consumer comparing against it would then read an
+    /// untouched default as a deliberate choice. What was sent is the only thing worth comparing to.
+    /// </summary>
+    private static readonly Dictionary<int, Dictionary<int, bool>> SentTwoButtonDefaults = new();
     private static readonly HashSet<int> WarnedForeignIds = new();
     private static bool _subscribed;
     private static Predicate<ReferenceHub>? _previousJoinFilter;
@@ -201,6 +211,11 @@ public static class KeybindRegistry
 
             foreach (ServerSpecificSettingBase setting in block.BuildSettings(player))
             {
+                if (player != null && setting is SSTwoButtonsSetting twoButtons)
+                {
+                    RecordSentDefault(player.PlayerId, twoButtons.SettingId, twoButtons.DefaultIsB);
+                }
+
                 yield return setting;
             }
         }
@@ -288,12 +303,26 @@ public static class KeybindRegistry
     /// </summary>
     public static bool? DefaultTwoButtonsFor(Player player, int settingId)
     {
-        if (player == null || !ActiveValueSettings.TryGetValue(settingId, out ActiveValueSetting active))
+        if (player == null)
         {
             return null;
         }
 
-        return active.Setting is KeybindBlock.TwoButtonsSetting twoButtons ? twoButtons.DefaultFor(player) : null;
+        return SentTwoButtonDefaults.TryGetValue(player.PlayerId, out Dictionary<int, bool> perSetting)
+            && perSetting.TryGetValue(settingId, out bool sent)
+                ? sent
+                : (bool?)null;
+    }
+
+    private static void RecordSentDefault(int playerId, int settingId, bool defaultIsB)
+    {
+        if (!SentTwoButtonDefaults.TryGetValue(playerId, out Dictionary<int, bool> perSetting))
+        {
+            perSetting = new Dictionary<int, bool>();
+            SentTwoButtonDefaults[playerId] = perSetting;
+        }
+
+        perSetting[settingId] = defaultIsB;
     }
 
     /// <summary>Immediately re-sends the caller-specific visible settings collection to one player.</summary>
@@ -392,6 +421,7 @@ public static class KeybindRegistry
         ServerSpecificSettingsSync.ServerOnSettingValueReceived -= OnSettingValueReceived;
         PlayerAuthenticationManager.OnInstanceModeChanged -= OnInstanceModeChanged;
         Pressed.Clear();
+        SentTwoButtonDefaults.Clear();
     }
 
     private static void OnSettingValueReceived(ReferenceHub hub, ServerSpecificSettingBase setting)
