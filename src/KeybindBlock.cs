@@ -17,9 +17,12 @@ public sealed class KeybindBlock
     internal readonly int BaseId;
     internal readonly string Owner;
     internal readonly List<HeaderEntry> Headers = new();
+    internal readonly List<TextEntry> Texts = new();
     internal readonly Dictionary<int, Binding> Bindings = new();
     internal readonly Dictionary<int, ValueSetting> ValueSettings = new();
     internal Func<Player, bool>? VisibilityFilter;
+    internal SettingsCategory Category = SettingsCategory.Other;
+    internal int SortOrder;
     internal bool Active;
 
     internal KeybindBlock(int baseId, string owner)
@@ -38,6 +41,61 @@ public sealed class KeybindBlock
     public KeybindBlock VisibleTo(Func<Player, bool> predicate)
     {
         VisibilityFilter = predicate ?? throw new ArgumentNullException(nameof(predicate));
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Files this block under a <see cref="SettingsCategory"/>, which is what decides where it lands in the
+    /// player's settings menu. Blocks are ordered by (category, base id), so a category's members are always
+    /// adjacent and their order is stable regardless of plugin load order.
+    ///
+    /// Purely presentational: it changes no setting id, so a player's saved values survive re-categorising.
+    /// </summary>
+    public KeybindBlock InCategory(SettingsCategory category)
+    {
+        // A C# enum accepts ANY cast integer, and the category becomes a synthesised header id at
+        // RegistryHeaders + (int)category. An undeclared value therefore invents a header the registry
+        // does not know to strip on the next rebuild (duplicates accumulate), and a large or negative one
+        // can land the header inside a plugin's own 1000-wide block. Fail at claim time instead.
+        if (Array.IndexOf(SssIdBlocks.AllCategories, category) < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(category),
+                category,
+                "Unknown SettingsCategory. Add it to SssIdBlocks.AllCategories before using it.");
+        }
+
+        Category = category;
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Sorts this block within its category. Lower comes first; the default 0 leaves a block ordered by its
+    /// base id, which is arbitrary. Use a negative value to PIN the settings players reach for most to the
+    /// top - "somewhere in the Gameplay section" is not good enough for a key nothing works without.
+    /// </summary>
+    public KeybindBlock Order(int sortOrder)
+    {
+        SortOrder = sortOrder;
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a read-only block of text. It renders directly under the block's header, ABOVE its keybinds and
+    /// settings, which is where an explanation is worth anything. <c>SSTextArea</c> has
+    /// <c>UserResponseMode.None</c>, so it costs no client response and can never be forged back at us.
+    /// </summary>
+    public KeybindBlock AddTextArea(
+        int local,
+        string content,
+        SSTextArea.FoldoutMode foldout = SSTextArea.FoldoutMode.NotCollapsable,
+        string collapsedText = null)
+    {
+        ValidateAvailableValueLocal(local);
+        Texts.Add(new TextEntry(local, content, foldout, collapsedText));
         KeybindRegistry.OnBlockChanged(this);
         return this;
     }
@@ -103,6 +161,37 @@ public sealed class KeybindBlock
         return this;
     }
 
+    /// <summary>
+    /// Registers a native two-button toggle and invokes <paramref name="onChanged"/> with <c>true</c> when
+    /// the player selects <paramref name="optionB"/>. This is the right control for an on/off switch — a
+    /// two-option dropdown works but reads as a list the player has to open.
+    ///
+    /// NOTE the client's PlayerPrefs key for a setting is
+    /// <c>SrvSp_&lt;server&gt;_&lt;typeCode&gt;_&lt;settingId&gt;</c>, and the TYPE CODE is part of it
+    /// (<c>ServerSpecificSettingBase.GeneratePrefsKey</c>). Converting an existing dropdown to this type
+    /// therefore resets it to <paramref name="defaultIsB"/> for every player who had already chosen a value.
+    /// Do it deliberately, not as a drive-by tidy-up.
+    /// </summary>
+    public KeybindBlock AddTwoButtons(
+        int local,
+        string label,
+        string optionA,
+        string optionB,
+        bool defaultIsB,
+        string hint,
+        Action<Player, bool> onChanged)
+    {
+        ValidateAvailableValueLocal(local);
+        if (string.IsNullOrEmpty(optionA) || string.IsNullOrEmpty(optionB))
+        {
+            throw new ArgumentException("Both button captions must be non-empty.", nameof(optionA));
+        }
+
+        ValueSettings[local] = new TwoButtonsSetting(local, label, optionA, optionB, defaultIsB, hint, onChanged);
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
     /// <summary>Registers a shared-registry slider and invokes <paramref name="onChanged"/> with its validated value.</summary>
     public KeybindBlock AddSlider(
         int local,
@@ -146,7 +235,15 @@ public sealed class KeybindBlock
     {
         foreach (HeaderEntry header in Headers)
         {
-            yield return new SSGroupHeader(BaseId + header.Local, header.Name);
+            // reducedPadding: the registry always emits a category header immediately above this one, so a
+            // block header is a SUB-heading now. Full padding under a category title reads as a gap, and the
+            // native SSPagesExample uses the same flag for exactly this "subcategory" case.
+            yield return new SSGroupHeader(BaseId + header.Local, header.Name, reducedPadding: true);
+        }
+
+        foreach (TextEntry text in Texts)
+        {
+            yield return new SSTextArea(BaseId + text.Local, text.Content, text.Foldout, text.CollapsedText);
         }
 
         foreach (Binding binding in Bindings.Values)
@@ -173,6 +270,11 @@ public sealed class KeybindBlock
             yield return BaseId + header.Local;
         }
 
+        foreach (TextEntry text in Texts)
+        {
+            yield return BaseId + text.Local;
+        }
+
         foreach (Binding binding in Bindings.Values)
         {
             yield return BaseId + binding.Local;
@@ -188,7 +290,10 @@ public sealed class KeybindBlock
     internal bool IsVisibleTo(Player player) => VisibilityFilter?.Invoke(player) != false;
 
     private bool IsLocalUsed(int local) =>
-        Bindings.ContainsKey(local) || ValueSettings.ContainsKey(local) || Headers.Exists(h => h.Local == local);
+        Bindings.ContainsKey(local)
+        || ValueSettings.ContainsKey(local)
+        || Headers.Exists(h => h.Local == local)
+        || Texts.Exists(t => t.Local == local);
 
     private void ValidateAvailableValueLocal(int local)
     {
@@ -223,6 +328,25 @@ public sealed class KeybindBlock
         public int Local { get; }
 
         public string Name { get; }
+    }
+
+    internal readonly struct TextEntry
+    {
+        public TextEntry(int local, string content, SSTextArea.FoldoutMode foldout, string collapsedText)
+        {
+            Local = local;
+            Content = content;
+            Foldout = foldout;
+            CollapsedText = collapsedText;
+        }
+
+        public int Local { get; }
+
+        public string Content { get; }
+
+        public SSTextArea.FoldoutMode Foldout { get; }
+
+        public string CollapsedText { get; }
     }
 
     internal sealed class Binding
@@ -300,6 +424,34 @@ public sealed class KeybindBlock
             if (setting is SSDropdownSetting dropdown)
             {
                 _onChanged(player, Mathf.Clamp(dropdown.SyncSelectionIndexValidated, 0, _options.Length - 1));
+            }
+        }
+    }
+
+    private sealed class TwoButtonsSetting : ValueSetting
+    {
+        private readonly string _optionA;
+        private readonly string _optionB;
+        private readonly bool _defaultIsB;
+        private readonly Action<Player, bool> _onChanged;
+
+        public TwoButtonsSetting(int local, string label, string optionA, string optionB, bool defaultIsB, string hint, Action<Player, bool> onChanged)
+            : base(local, label, hint)
+        {
+            _optionA = optionA;
+            _optionB = optionB;
+            _defaultIsB = defaultIsB;
+            _onChanged = onChanged;
+        }
+
+        public override ServerSpecificSettingBase Build(int absoluteId) =>
+            new SSTwoButtonsSetting(absoluteId, Label, _optionA, _optionB, _defaultIsB, Hint);
+
+        public override void Invoke(Player player, ServerSpecificSettingBase setting)
+        {
+            if (setting is SSTwoButtonsSetting twoButtons)
+            {
+                _onChanged(player, twoButtons.SyncIsB);
             }
         }
     }

@@ -25,14 +25,47 @@ namespace ServerKeybinds;
 /// // block.Disable();  // in Plugin.Disable
 /// </code>
 ///
-/// API 2 owns keybinds, dropdowns, and sliders. This ships as a dependency LIBRARY (deployed to LabAPI's <c>dependencies/global</c>), so it loads exactly
+/// API 3 owns keybinds, dropdowns, sliders, and two-button toggles, and it also owns the ORDER of the
+/// menu: blocks are grouped by <see cref="SettingsCategory"/> under one synthesised group header each, so
+/// what the player sees no longer depends on plugin load order. This ships as a dependency LIBRARY (deployed to LabAPI's <c>dependencies/global</c>), so it loads exactly
 /// once before any plugin and its statics are shared. A plugin that hard-references it but is missing the DLL
 /// fails to load entirely rather than running half-broken.
 /// </summary>
 public static class KeybindRegistry
 {
     /// <summary>Bumped on any breaking change to this API; consumers can assert it in their Enable.</summary>
-    public const int ApiVersion = 2;
+    /// <summary>
+    /// NOT a const, so it is read from whichever assembly is loaded rather than baked into the caller.
+    ///
+    /// DO NOT USE THIS TO DETECT AN OLD REGISTRY. API 2 declared <c>ApiVersion</c> as a const FIELD; a
+    /// consumer compiled against API 3 emits a call to the property GETTER, which does not exist there, so
+    /// reading it against an API 2 DLL throws <c>MissingMethodException</c> exactly like calling
+    /// <c>AddTwoButtons</c> would. It is no safer than the members it would be guarding.
+    ///
+    /// The assembly version is not a boundary either: this assembly is not strong-named, so the CLR
+    /// ignores version when binding it (see the csproj).
+    ///
+    /// The ONLY safe compatibility check is to probe for the members themselves by reflection -
+    /// <c>typeof(KeybindBlock).GetMethod("AddTwoButtons")</c> and friends - and to make the API 3 calls
+    /// from a separate <c>[MethodImpl(MethodImplOptions.NoInlining)]</c> method, because the JIT resolves
+    /// call targets when it compiles a method, not when the call executes. Both consumers in this metarepo
+    /// do that; copy them rather than this property.
+    ///
+    /// What this IS good for: logging and diagnostics from code that already knows API 3 is present, and
+    /// as a plain version guard between two future releases that both expose it as a property.
+    /// </summary>
+    public static int ApiVersion => 3;
+
+    /// <summary>
+    /// Language for the category headers this registry synthesises. An empty value or <c>cn</c> renders
+    /// Chinese, <c>en</c> renders English. Everything else in the menu is authored by the consuming plugin,
+    /// which localises its own strings; only these headers belong to the registry.
+    ///
+    /// <c>DefinedSettings</c> is one global array, so this cannot be per-player. It follows the metarepo
+    /// default of falling back to Chinese. A consumer may set it from its own language config; last writer
+    /// wins, so a server should not set it from more than one plugin.
+    /// </summary>
+    public static string Language { get; set; } = string.Empty;
 
     private static readonly Dictionary<int, KeybindBlock> Blocks = new();
     private static readonly Dictionary<int, ActiveBinding> ActiveBindings = new();
@@ -52,6 +85,18 @@ public static class KeybindRegistry
         if (baseId % SssIdBlocks.BlockWidth != 0)
         {
             throw new ArgumentException($"Block base {baseId} must be a multiple of {SssIdBlocks.BlockWidth}.", nameof(baseId));
+        }
+
+        // The registry synthesises its category headers inside this block, at RegistryHeaders +
+        // (int)category - and Gameplay is 0, so a consumer claiming this base and adding the conventional
+        // local-0 header would emit a SECOND entry with id 23000. Blocks are 1000-aligned, so this base is
+        // the only claimable one that can overlap the reserved range.
+        if (baseId == SssIdBlocks.RegistryHeaders)
+        {
+            throw new ArgumentException(
+                $"Block base {baseId} is reserved for the registry's own category headers. " +
+                "Pick another base in SssIdBlocks.",
+                nameof(baseId));
         }
 
         // The actual claim (and the collision check) happens at Enable, so that a plugin reload — which
@@ -120,6 +165,70 @@ public static class KeybindRegistry
         }
     }
 
+    private static string CategoryLabel(SettingsCategory category)
+    {
+        bool english = string.Equals(Language, "en", StringComparison.OrdinalIgnoreCase);
+        return category switch
+        {
+            SettingsCategory.Gameplay => english ? "Gameplay" : "游戏玩法",
+            SettingsCategory.Display => english ? "Display & Tags" : "显示与标签",
+            SettingsCategory.Announcements => english ? "Announcements" : "公告与提示",
+            SettingsCategory.Tools => english ? "Tools & Admin" : "工具与管理",
+            _ => english ? "Other" : "其他",
+        };
+    }
+
+    /// <summary>
+    /// The registry canonical render order: category first (by the enum numeric order), then base id, so a
+    /// category members are adjacent and the sequence is identical on every server regardless of the order
+    /// plugins happened to load in. One category header is emitted the first time that category appears, and
+    /// a category with no included block emits nothing.
+    /// </summary>
+    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include)
+    {
+        SettingsCategory? current = null;
+        foreach (KeybindBlock block in Blocks.Values
+                     .Where(include)
+                     .OrderBy(block => (int)block.Category)
+                     .ThenBy(block => block.SortOrder)
+                     .ThenBy(block => block.BaseId))
+        {
+            if (current != block.Category)
+            {
+                current = block.Category;
+                yield return new SSGroupHeader(SssIdBlocks.CategoryHeaderId(block.Category), CategoryLabel(block.Category));
+            }
+
+            foreach (ServerSpecificSettingBase setting in block.BuildSettings())
+            {
+                yield return setting;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every id the registry may emit that no block owns: the synthesised category headers.
+    ///
+    /// Derived from the CLAIMED BLOCKS as well as the declared list, not from the declared list alone. A
+    /// header whose category is no longer represented still has to be strippable, or Rebuild would leave
+    /// the stale one in place and prepend a fresh one on every pass. <see cref="KeybindBlock.InCategory"/>
+    /// rejects undeclared values, so in practice these agree - the union is belt and braces for a block
+    /// claimed before that validation existed.
+    /// </summary>
+    private static IEnumerable<int> RegistryOwnedIds()
+    {
+        HashSet<SettingsCategory> categories = new(SssIdBlocks.AllCategories);
+        foreach (KeybindBlock block in Blocks.Values)
+        {
+            categories.Add(block.Category);
+        }
+
+        foreach (SettingsCategory category in categories)
+        {
+            yield return SssIdBlocks.CategoryHeaderId(category);
+        }
+    }
+
     /// <summary>
     /// Rebuilds the shared <see cref="ServerSpecificSettingsSync.DefinedSettings"/>: strip every id this registry
     /// owns (across ALL claimed blocks, so a disabled block's stale entries are removed), re-add only ACTIVE blocks'
@@ -127,7 +236,7 @@ public static class KeybindRegistry
     /// </summary>
     private static void Rebuild()
     {
-        HashSet<int> ownedIds = new();
+        HashSet<int> ownedIds = new(RegistryOwnedIds());
         foreach (KeybindBlock block in Blocks.Values)
         {
             foreach (int id in block.OwnedIds())
@@ -136,7 +245,6 @@ public static class KeybindRegistry
             }
         }
 
-        List<ServerSpecificSettingBase> ours = new();
         ActiveBindings.Clear();
         ActiveValueSettings.Clear();
         foreach (KeybindBlock block in Blocks.Values)
@@ -146,7 +254,6 @@ public static class KeybindRegistry
                 continue;
             }
 
-            ours.AddRange(block.BuildSettings());
             foreach (KeyValuePair<int, KeybindBlock.Binding> pair in block.Bindings)
             {
                 ActiveBindings[block.BaseId + pair.Key] = new ActiveBinding(block, pair.Value);
@@ -157,11 +264,18 @@ public static class KeybindRegistry
             }
         }
 
+        List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active).ToList();
+
         ServerSpecificSettingBase[] existingSettings = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
         WarnOnForeignCollisions(existingSettings, ownedIds);
-        ServerSpecificSettingsSync.DefinedSettings = existingSettings
-            .Where(setting => !ownedIds.Contains(setting.SettingId))
-            .Concat(ours)
+
+        // OURS FIRST, foreign entries after. Appending used to put every registry setting behind every
+        // plugin that merges into DefinedSettings on its own (HUD toggles, music mutes), so the ability
+        // keybinds - which nothing works without - sat at the very bottom of the menu no matter how the
+        // categories were ordered. Foreign entries keep their own relative order and are otherwise
+        // untouched; the registry is the sanctioned owner of this array for metarepo plugins.
+        ServerSpecificSettingsSync.DefinedSettings = ours
+            .Concat(existingSettings.Where(setting => !ownedIds.Contains(setting.SettingId)))
             .ToArray();
         SendPersonalizedToAll();
     }
@@ -190,7 +304,7 @@ public static class KeybindRegistry
 
     private static void SendPersonalized(Player player)
     {
-        HashSet<int> allOwnedIds = new();
+        HashSet<int> allOwnedIds = new(RegistryOwnedIds());
         foreach (KeybindBlock block in Blocks.Values)
         {
             foreach (int id in block.OwnedIds())
@@ -199,16 +313,12 @@ public static class KeybindRegistry
             }
         }
 
-        List<ServerSpecificSettingBase> collection = (ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
-            .Where(setting => !allOwnedIds.Contains(setting.SettingId))
-            .ToList();
-        foreach (KeybindBlock block in Blocks.Values)
-        {
-            if (block.Active && block.IsVisibleTo(player))
-            {
-                collection.AddRange(block.BuildSettings());
-            }
-        }
+        // Ordered per RECIPIENT, not once globally: a category whose only block is hidden from this player
+        // must not leave a dangling header behind for them. Ours lead here too, matching Rebuild.
+        List<ServerSpecificSettingBase> collection =
+            BuildOrdered(block => block.Active && block.IsVisibleTo(player)).ToList();
+        collection.AddRange((ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
+            .Where(setting => !allOwnedIds.Contains(setting.SettingId)));
 
         ServerSpecificSettingsSync.SendToPlayer(player.ReferenceHub, collection.ToArray());
     }
@@ -391,9 +501,18 @@ public static class KeybindRegistry
 
     private static void LogBlock(KeybindBlock block)
     {
-        string binds = string.Join(", ", block.Bindings.Values
-            .Select(b => $"{block.BaseId + b.Local}:{b.Label}({b.DefaultKey})"));
-        Logger.Info($"[ServerKeybinds] '{block.Owner}' enabled block {block.BaseId} [{binds}].");
+        // Every entry, not just keybinds: a block that registers only a toggle used to log an empty list,
+        // which reads exactly like "the setting failed to register".
+        IEnumerable<string> binds = block.Bindings.Values
+            .Select(b => $"{block.BaseId + b.Local}:{b.Label}({b.DefaultKey})");
+        IEnumerable<string> values = block.ValueSettings.Values
+            .Select(v => $"{block.BaseId + v.Local}:{v.Label}");
+        IEnumerable<string> texts = block.Texts
+            .Select(t => $"{block.BaseId + t.Local}:<text>");
+        string entries = string.Join(", ", texts.Concat(binds).Concat(values));
+        Logger.Info(
+            $"[ServerKeybinds] '{block.Owner}' enabled block {block.BaseId} " +
+            $"under {block.Category} [{entries}].");
     }
 
     private static bool SuppressNativeJoinSend(ReferenceHub _) => false;
