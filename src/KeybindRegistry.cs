@@ -34,7 +34,16 @@ namespace ServerKeybinds;
 public static class KeybindRegistry
 {
     /// <summary>Bumped on any breaking change to this API; consumers can assert it in their Enable.</summary>
-    public const int ApiVersion = 3;
+    /// <summary>
+    /// NOT a const. A const is baked into the CALLER at compile time, so a consumer built against API 3
+    /// would inline 3 and any `ApiVersion &gt;= 3` guard it wrote would be true even when an API 2 DLL is
+    /// the one actually loaded - the check could never fire. As a static property it is read from whichever
+    /// assembly is present at runtime, so the guard means something.
+    ///
+    /// The real boundary is the assembly version (see the csproj): a mismatch fails at assembly-resolve
+    /// time. This value is for diagnostics and for a consumer that wants to degrade rather than die.
+    /// </summary>
+    public static int ApiVersion => 3;
 
     /// <summary>
     /// Language for the category headers this registry synthesises. An empty value or <c>cn</c> renders
@@ -174,10 +183,24 @@ public static class KeybindRegistry
         }
     }
 
-    /// <summary>Every id the registry may emit that no block owns: the synthesised category headers.</summary>
+    /// <summary>
+    /// Every id the registry may emit that no block owns: the synthesised category headers.
+    ///
+    /// Derived from the CLAIMED BLOCKS as well as the declared list, not from the declared list alone. A
+    /// header whose category is no longer represented still has to be strippable, or Rebuild would leave
+    /// the stale one in place and prepend a fresh one on every pass. <see cref="KeybindBlock.InCategory"/>
+    /// rejects undeclared values, so in practice these agree - the union is belt and braces for a block
+    /// claimed before that validation existed.
+    /// </summary>
     private static IEnumerable<int> RegistryOwnedIds()
     {
-        foreach (SettingsCategory category in SssIdBlocks.AllCategories)
+        HashSet<SettingsCategory> categories = new(SssIdBlocks.AllCategories);
+        foreach (KeybindBlock block in Blocks.Values)
+        {
+            categories.Add(block.Category);
+        }
+
+        foreach (SettingsCategory category in categories)
         {
             yield return SssIdBlocks.CategoryHeaderId(category);
         }

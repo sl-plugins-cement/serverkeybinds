@@ -54,6 +54,18 @@ public sealed class KeybindBlock
     /// </summary>
     public KeybindBlock InCategory(SettingsCategory category)
     {
+        // A C# enum accepts ANY cast integer, and the category becomes a synthesised header id at
+        // RegistryHeaders + (int)category. An undeclared value therefore invents a header the registry
+        // does not know to strip on the next rebuild (duplicates accumulate), and a large or negative one
+        // can land the header inside a plugin's own 1000-wide block. Fail at claim time instead.
+        if (Array.IndexOf(SssIdBlocks.AllCategories, category) < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(category),
+                category,
+                "Unknown SettingsCategory. Add it to SssIdBlocks.AllCategories before using it.");
+        }
+
         Category = category;
         KeybindRegistry.OnBlockChanged(this);
         return this;

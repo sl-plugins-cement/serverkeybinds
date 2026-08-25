@@ -3,6 +3,14 @@
     <TargetFramework>net48</TargetFramework>
     <OutputType>Library</OutputType>
     <LangVersion>latest</LangVersion>
+    <!-- Kept in lockstep with KeybindRegistry.ApiVersion so the deployed DLL can be identified from
+         its file properties alone. It is NOT a binding boundary: this assembly is not strong-named
+         (PublicKeyToken=null), and the CLR ignores version, culture and token when binding those. An
+         old consumer therefore still loads against a new DLL - which is why consumers must probe for
+         API 3 members by reflection before calling them, not trust a version number. -->
+    <AssemblyVersion>3.0.0.0</AssemblyVersion>
+    <FileVersion>3.0.0.0</FileVersion>
+    <Version>3.0.0</Version>
     <Nullable>enable</Nullable>
     <AssemblyName>ServerKeybinds</AssemblyName>
     <RootNamespace>ServerKeybinds</RootNamespace>
