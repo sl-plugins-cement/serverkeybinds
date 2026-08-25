@@ -23,6 +23,9 @@
     <Reference Include="Mirror" HintPath="$(SCP_SL_MANAGED)\Mirror.dll" Private="false" />
     <Reference Include="UnityEngine" HintPath="$(SCP_SL_MANAGED)\UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(SCP_SL_MANAGED)\UnityEngine.CoreModule.dll" Private="false" />
+    <!-- SSTextArea's constructor defaults a TMPro.TextAlignmentOptions parameter, so the compiler
+         needs this reference even where we never pass one. -->
+    <Reference Include="Unity.TextMeshPro" HintPath="$(SCP_SL_MANAGED)\Unity.TextMeshPro.dll" Private="false" />
   </ItemGroup>
 
   <!-- Auto-deploy the built DLL over its existing copies on the local LabAPI server (see Deploy.targets). -->
