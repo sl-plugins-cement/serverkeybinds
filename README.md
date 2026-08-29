@@ -75,6 +75,27 @@ The client stores each value in PlayerPrefs under `SrvSp_<server>_<typeCode>_<se
 existing dropdown to a two-button toggle therefore silently resets it to its default for every player who had
 already chosen a value. Do that deliberately, not as a drive-by tidy-up.
 
+### Diagnostics: `Debug`, `PressTrace` and the `keybinds` RA command
+
+- `KeybindRegistry.Debug` (static bool, consumer-set like `Language`; last writer wins) gates a per-send
+  audit log line — every personalized send logs its entry count, recipient and reason (`join`,
+  `join-retry`, `refresh`, `rebuild`) — plus the join-send skip diagnostics. The previously silent
+  join-send skips now each log why; the two transient ones (no client connection yet, no player wrapper
+  yet) retry once after 1.5 s, a retry that succeeds logs Info, and a second failure logs a Warn.
+- `KeybindRegistry.PressTrace` gates a trace line at every keybind routing decision: swallowed value
+  responses, unknown setting ids, press/release latch outcomes, and which block/binding a press was
+  routed to.
+- RA command **`keybinds`** (alias `skb`, requires `ServerConsoleCommands`), self-registered by the
+  registry because LabAPI does not scan dependency libraries for commands:
+  - `keybinds status <id|name>` — the entry count the player would receive now, the last recorded send
+    (UTC time + count), their pressed latches, and the client acknowledgement state (ack version 0
+    means the client never acknowledged any settings pack — i.e. "never sent" rather than "sent and
+    later overwritten").
+  - `keybinds resend <id|name>` — re-pushes the personalized settings collection to that player.
+  - `keybinds trace on|off` — toggles `PressTrace` at runtime.
+- State hygiene: press latches clear on role change and round restart, and every per-player store
+  (latches, sent two-button defaults, send audit) is pruned when the player leaves.
+
 `CustomItems.dll` hard-depends on ServerKeybinds. Any custom-item plugin requiring settings or keybinds must use this registry.
 
 ## 中文
@@ -114,5 +135,15 @@ API 3 之前，菜单顺序取决于 `Dictionary<int, KeybindBlock>` 的枚举�
 `AddTwoButtons` 对应原生 `SSTwoButtonsSetting`，是开/关类开关的正确控件；两选项下拉菜单虽然可用，但玩家需要展开才能选择。玩家选中选项 **B** 时回调传入 `true`。
 
 客户端将每个设置值保存在 PlayerPrefs 的 `SrvSp_<服务器>_<类型码>_<设置ID>` 下（见 `ServerSpecificSettingBase.GeneratePrefsKey`），**类型码是键的一部分**。因此将现有下拉菜单改为双按钮开关，会静默地把所有已选过值的玩家重置为默认值。请有意识地进行这类转换，不要顺手改。
+
+### 诊断：`Debug`、`PressTrace` 与 `keybinds` RA 命令
+
+- `KeybindRegistry.Debug`（静态布尔值，与 `Language` 一样由使用插件设置，后写者生效）控制每次发送的审计日志——每次个性化发送都会记录条目数量、接收者与原因（`join`、`join-retry`、`refresh`、`rebuild`），同时控制加入发送被跳过时的诊断输出。以前静默跳过的分支现在都会记录原因；其中两个瞬态分支（客户端连接尚未建立、玩家包装对象尚不存在）会在 1.5 秒后重试一次，重试成功记录 Info，二次失败记录 Warn。
+- `KeybindRegistry.PressTrace` 控制按键路由每个决策点的跟踪日志：被丢弃的设置值响应、未知设置 ID、按下/释放锁存结果，以及按键被路由到哪个区块与绑定。
+- RA 命令 **`keybinds`**（别名 `skb`，需要 `ServerConsoleCommands` 权限），由注册表自行注册（LabAPI 不会扫描依赖库中的命令）：
+  - `keybinds status <ID|名称>` —— 该玩家此刻应收到的条目数量、最近一次记录的发送（UTC 时间 + 数量）、其按下锁存列表，以及客户端确认状态（确认版本为 0 表示客户端从未确认过任何设置包，即“从未发送”而非“发送后被覆盖”）。
+  - `keybinds resend <ID|名称>` —— 向该玩家重新推送个性化设置集合。
+  - `keybinds trace on|off` —— 运行时切换 `PressTrace`。
+- 状态清理：按下锁存会在角色变更与回合重启时清除；玩家离开时会清理其全部按玩家状态（锁存、已发送的双按钮默认值、发送审计记录）。
 
 `CustomItems.dll` 硬依赖 ServerKeybinds。任何需要设置或按键绑定的自定义物品插件都必须使用该注册表。

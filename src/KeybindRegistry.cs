@@ -3,7 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using CentralAuth;
 using LabApi.Features.Wrappers;
+using LabApi.Loader;
 using MEC;
+using PlayerRoles;
+using RemoteAdmin;
+using RoundRestarting;
 using UserSettings.ServerSpecific;
 using Logger = LabApi.Features.Console.Logger;
 
@@ -53,6 +57,20 @@ public static class KeybindRegistry
     /// </summary>
     public static string Language { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Gates the per-send audit log line (one <c>Logger.Debug</c> per personalized settings send, tagged
+    /// with the reason) and the join-send skip diagnostics. Like <see cref="Language"/>, a consumer sets
+    /// it from its own config; last writer wins.
+    /// </summary>
+    public static bool Debug { get; set; }
+
+    /// <summary>
+    /// Gates the press-trace log lines emitted at every keybind/value routing decision (received value
+    /// swallowed, unknown id, latch outcomes, handler routing). Same consumer-set convention as
+    /// <see cref="Language"/>; also toggleable at runtime via the <c>keybinds trace</c> RA command.
+    /// </summary>
+    public static bool PressTrace { get; set; }
+
     private static readonly Dictionary<int, KeybindBlock> Blocks = new();
     private static readonly Dictionary<int, ActiveBinding> ActiveBindings = new();
     private static readonly Dictionary<int, ActiveValueSetting> ActiveValueSettings = new();
@@ -68,6 +86,11 @@ public static class KeybindRegistry
     /// </summary>
     private static readonly Dictionary<int, Dictionary<int, bool>> SentTwoButtonDefaults = new();
     private static readonly HashSet<int> WarnedForeignIds = new();
+    private static readonly Dictionary<int, DateTime> LastSendUtc = new();
+    private static readonly Dictionary<int, int> LastSendCount = new();
+    // Keyed by hub.netId: a uint hashes safely and never dereferences a destroyed gameObject.
+    private static readonly HashSet<uint> JoinRetried = new();
+    private static bool _commandRegistered;
     private static bool _subscribed;
     private static Predicate<ReferenceHub>? _previousJoinFilter;
 
@@ -319,7 +342,50 @@ public static class KeybindRegistry
             return;
         }
 
-        SendPersonalized(player);
+        SendPersonalized(player, "refresh");
+    }
+
+    /// <summary>
+    /// The last personalized-send audit record for <paramref name="player"/>: when it happened (UTC) and
+    /// how many entries it carried. False when no send has been recorded for them this round.
+    /// </summary>
+    public static bool TryGetSendAudit(Player player, out DateTime lastSendUtc, out int entryCount)
+    {
+        lastSendUtc = default;
+        entryCount = 0;
+        return player != null
+            && LastSendUtc.TryGetValue(player.PlayerId, out lastSendUtc)
+            && LastSendCount.TryGetValue(player.PlayerId, out entryCount);
+    }
+
+    /// <summary>The setting ids currently latched as pressed for <paramref name="player"/> (snapshot).</summary>
+    public static IReadOnlyCollection<int> PressedFor(Player player)
+    {
+        return player?.ReferenceHub != null && Pressed.TryGetValue(player.ReferenceHub, out HashSet<int> pressed)
+            ? pressed.ToArray()
+            : Array.Empty<int>();
+    }
+
+    /// <summary>
+    /// Diagnostics only: the entry count <paramref name="player"/> WOULD receive from a personalized send
+    /// right now. Mirrors <see cref="SendPersonalized"/> but builds with a null player so the
+    /// <see cref="SentTwoButtonDefaults"/> record of what was ACTUALLY sent is not overwritten (the player
+    /// only affects value defaults, never the entry count).
+    /// </summary>
+    internal static int PersonalizedEntryCountFor(Player player)
+    {
+        HashSet<int> allOwnedIds = new(RegistryOwnedIds());
+        foreach (KeybindBlock block in Blocks.Values)
+        {
+            foreach (int id in block.OwnedIds())
+            {
+                allOwnedIds.Add(id);
+            }
+        }
+
+        return BuildOrdered(block => block.Active && block.IsVisibleTo(player)).Count()
+            + (ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
+                .Count(setting => !allOwnedIds.Contains(setting.SettingId));
     }
 
     private static void SendPersonalizedToAll()
@@ -328,12 +394,12 @@ public static class KeybindRegistry
         {
             if (player.IsPlayer && player.IsReady)
             {
-                SendPersonalized(player);
+                SendPersonalized(player, "rebuild");
             }
         }
     }
 
-    private static void SendPersonalized(Player player)
+    private static void SendPersonalized(Player player, string reason)
     {
         HashSet<int> allOwnedIds = new(RegistryOwnedIds());
         foreach (KeybindBlock block in Blocks.Values)
@@ -352,6 +418,10 @@ public static class KeybindRegistry
             .Where(setting => !allOwnedIds.Contains(setting.SettingId)));
 
         ServerSpecificSettingsSync.SendToPlayer(player.ReferenceHub, collection.ToArray());
+        LastSendUtc[player.PlayerId] = DateTime.UtcNow;
+        LastSendCount[player.PlayerId] = collection.Count;
+        // LabAPI's Logger.Debug is NOT globally gated - always pass the flag or this spams every send.
+        Logger.Debug($"[ServerKeybinds] Sent {collection.Count} entries to {player.Nickname} ({player.PlayerId}) [{reason}].", Debug);
     }
 
     private static void WarnOnForeignCollisions(ServerSpecificSettingBase[] existingSettings, HashSet<int> ownedIds)
@@ -389,6 +459,26 @@ public static class KeybindRegistry
         ServerSpecificSettingsSync.SendOnJoinFilter = SuppressNativeJoinSend;
         ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnSettingValueReceived;
         PlayerAuthenticationManager.OnInstanceModeChanged += OnInstanceModeChanged;
+        PlayerRoleManager.OnRoleChanged += OnRoleChanged;
+        RoundRestart.OnRestartTriggered += OnRoundRestart;
+        ReferenceHub.OnPlayerRemoved += OnPlayerRemoved;
+
+        if (!_commandRegistered)
+        {
+            // LabAPI only scans PLUGIN assemblies for [CommandHandler] types; a dependencies/global
+            // library must self-register. Registered once for the process lifetime - TryRegisterCommand
+            // no-ops (returning true) on a duplicate name, so a later re-subscribe cannot double-add.
+            _commandRegistered = CommandLoader.TryRegisterCommand(
+                new KeybindsCommand(), CommandProcessor.RemoteAdminCommandHandler, "ServerKeybinds");
+            if (!_commandRegistered)
+            {
+                Logger.Warn("[ServerKeybinds] 'keybinds' RA command could not be registered (name already taken?).");
+            }
+            else
+            {
+                Logger.Info("[ServerKeybinds] Registered RA command 'keybinds' (alias 'skb').");
+            }
+        }
     }
 
     private static void Unsubscribe()
@@ -406,8 +496,63 @@ public static class KeybindRegistry
         _previousJoinFilter = null;
         ServerSpecificSettingsSync.ServerOnSettingValueReceived -= OnSettingValueReceived;
         PlayerAuthenticationManager.OnInstanceModeChanged -= OnInstanceModeChanged;
+        PlayerRoleManager.OnRoleChanged -= OnRoleChanged;
+        RoundRestart.OnRestartTriggered -= OnRoundRestart;
+        ReferenceHub.OnPlayerRemoved -= OnPlayerRemoved;
         Pressed.Clear();
         SentTwoButtonDefaults.Clear();
+        LastSendUtc.Clear();
+        LastSendCount.Clear();
+        JoinRetried.Clear();
+    }
+
+    private static void OnRoleChanged(ReferenceHub userHub, PlayerRoleBase prevRole, PlayerRoleBase newRole)
+    {
+        // A role change invalidates any held key: the client keybind state resets with the role, so a
+        // latched press would otherwise never see its falling edge and block the next rising one.
+        // Dispatch the release BEFORE dropping the latch - every delivered press must be followed by
+        // exactly one release, or hold-to-act consumers without their own role hook stay stuck held.
+        if (userHub == null || !Pressed.TryGetValue(userHub, out HashSet<int> pressed))
+        {
+            return;
+        }
+
+        foreach (int settingId in new List<int>(pressed))
+        {
+            if (ActiveBindings.TryGetValue(settingId, out ActiveBinding activeBinding))
+            {
+                if (PressTrace)
+                {
+                    Logger.Debug($"[ServerKeybinds] Trace: role change releases latched id {settingId} (player {userHub.PlayerId}).", PressTrace);
+                }
+
+                Invoke(activeBinding, userHub, released: true);
+            }
+        }
+
+        Pressed.Remove(userHub);
+    }
+
+    private static void OnRoundRestart()
+    {
+        Pressed.Clear();
+        JoinRetried.Clear();
+    }
+
+    private static void OnPlayerRemoved(ReferenceHub hub)
+    {
+        // Fires from ReferenceHub.OnDestroy while the hub is still valid, so removing the hub-keyed entry
+        // here also closes the destroyed-hub-key hazard (ReferenceHub.GetHashCode derefs its gameObject).
+        if (hub == null)
+        {
+            return;
+        }
+
+        Pressed.Remove(hub);
+        SentTwoButtonDefaults.Remove(hub.PlayerId);
+        LastSendUtc.Remove(hub.PlayerId);
+        LastSendCount.Remove(hub.PlayerId);
+        JoinRetried.Remove(hub.netId);
     }
 
     private static void OnSettingValueReceived(ReferenceHub hub, ServerSpecificSettingBase setting)
@@ -417,6 +562,10 @@ public static class KeybindRegistry
             Player? valuePlayer = Player.Get(hub);
             if (valuePlayer == null || !activeValue.Block.IsVisibleTo(valuePlayer))
             {
+                if (PressTrace)
+                {
+                    Logger.Debug($"[ServerKeybinds] Trace: value for id {setting.SettingId} from player {hub.PlayerId} swallowed: block '{activeValue.Block.Owner}' not visible.", PressTrace);
+                }
                 return;
             }
 
@@ -431,8 +580,17 @@ public static class KeybindRegistry
             return;
         }
 
-        if (setting is not SSKeybindSetting keybind || !ActiveBindings.TryGetValue(setting.SettingId, out ActiveBinding activeBinding))
+        if (setting is not SSKeybindSetting keybind)
         {
+            return;
+        }
+
+        if (!ActiveBindings.TryGetValue(setting.SettingId, out ActiveBinding activeBinding))
+        {
+            if (PressTrace)
+            {
+                Logger.Debug($"[ServerKeybinds] Trace: no active binding for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+            }
             return;
         }
 
@@ -448,7 +606,18 @@ public static class KeybindRegistry
         {
             if (pressed.Remove(setting.SettingId))
             {
+                if (PressTrace)
+                {
+                    Logger.Debug($"[ServerKeybinds] Trace: release for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+                }
                 Invoke(activeBinding, hub, released: true);
+            }
+            else
+            {
+                if (PressTrace)
+                {
+                    Logger.Debug($"[ServerKeybinds] Trace: release with no latch for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+                }
             }
 
             return;
@@ -456,9 +625,17 @@ public static class KeybindRegistry
 
         if (!pressed.Add(setting.SettingId))
         {
+            if (PressTrace)
+            {
+                Logger.Debug($"[ServerKeybinds] Trace: press already latched (ignored) for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+            }
             return;
         }
 
+        if (PressTrace)
+        {
+            Logger.Debug($"[ServerKeybinds] Trace: press latched for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+        }
         Invoke(activeBinding, hub, released: false);
     }
 
@@ -476,9 +653,17 @@ public static class KeybindRegistry
         }
 
         KeybindBlock.Binding binding = active.Binding;
+        if (PressTrace)
+        {
+            Logger.Debug($"[ServerKeybinds] Trace: routing {(released ? "release" : "press")} to owner='{active.Block.Owner}' binding='{binding.Label}' (player {hub.PlayerId}).", PressTrace);
+        }
         Action<Player>? handler = released ? binding.OnReleased : binding.OnPressed;
         if (handler == null)
         {
+            if (PressTrace)
+            {
+                Logger.Debug($"[ServerKeybinds] Trace: no handler for this edge on binding '{binding.Label}'.", PressTrace);
+            }
             return;
         }
 
@@ -504,24 +689,50 @@ public static class KeybindRegistry
             return;
         }
 
+        ScheduleJoinSend(hub, 0.75f, isRetry: false);
+    }
+
+    private static void ScheduleJoinSend(ReferenceHub hub, float delaySeconds, bool isRetry)
+    {
         if (_previousJoinFilter != null && !_previousJoinFilter(hub))
         {
+            Logger.Debug($"[ServerKeybinds] Join send for netId {hub.netId} suppressed by a foreign SendOnJoinFilter.", Debug);
             return;
         }
 
-        Timing.CallDelayed(0.75f, () =>
+        Timing.CallDelayed(delaySeconds, () =>
         {
-            if (!_subscribed || hub == null || hub.connectionToClient == null)
+            if (!_subscribed)
             {
+                Logger.Debug("[ServerKeybinds] Join send skipped: registry torn down.", Debug);
+                return;
+            }
+
+            if (hub == null)
+            {
+                Logger.Debug("[ServerKeybinds] Join send skipped: hub gone.", Debug);
+                return;
+            }
+
+            if (hub.connectionToClient == null)
+            {
+                RetryJoinSendOrWarn(hub, isRetry, "no client connection yet");
                 return;
             }
 
             try
             {
                 Player? player = Player.Get(hub);
-                if (player != null)
+                if (player == null)
                 {
-                    SendPersonalized(player);
+                    RetryJoinSendOrWarn(hub, isRetry, "no Player wrapper yet");
+                    return;
+                }
+
+                SendPersonalized(player, isRetry ? "join-retry" : "join");
+                if (isRetry)
+                {
+                    Logger.Info($"[ServerKeybinds] Join-send retry succeeded for {player.Nickname} ({player.PlayerId}).");
                 }
             }
             catch (Exception exception)
@@ -529,6 +740,22 @@ public static class KeybindRegistry
                 Logger.Warn($"[ServerKeybinds] Failed to re-send settings to a player: {exception.GetBaseException().Message}");
             }
         });
+    }
+
+    /// <summary>
+    /// A transient join-send skip retries exactly once per hub (keyed by netId); a second failure is a
+    /// Warn because that player now has no Server-Specific Settings entries until the next Rebuild.
+    /// </summary>
+    private static void RetryJoinSendOrWarn(ReferenceHub hub, bool isRetry, string why)
+    {
+        if (!isRetry && JoinRetried.Add(hub.netId))
+        {
+            Logger.Debug($"[ServerKeybinds] Join send for netId {hub.netId} skipped ({why}); retrying once in 1.5s.", Debug);
+            ScheduleJoinSend(hub, 1.5f, isRetry: true);
+            return;
+        }
+
+        Logger.Warn($"[ServerKeybinds] Join send for netId {hub.netId} failed after retry ({why}); the player may have no settings menu.");
     }
 
     private static void LogBlock(KeybindBlock block)
