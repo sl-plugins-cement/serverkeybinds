@@ -33,26 +33,12 @@ namespace ServerKeybinds;
 /// </summary>
 public static class KeybindRegistry
 {
-    /// <summary>Bumped on any breaking change to this API; consumers can assert it in their Enable.</summary>
     /// <summary>
-    /// NOT a const, so it is read from whichever assembly is loaded rather than baked into the caller.
+    /// What this registry currently implements, for logs and diagnostics.
     ///
-    /// DO NOT USE THIS TO DETECT AN OLD REGISTRY. API 2 declared <c>ApiVersion</c> as a const FIELD; a
-    /// consumer compiled against API 3 emits a call to the property GETTER, which does not exist there, so
-    /// reading it against an API 2 DLL throws <c>MissingMethodException</c> exactly like calling
-    /// <c>AddTwoButtons</c> would. It is no safer than the members it would be guarding.
-    ///
-    /// The assembly version is not a boundary either: this assembly is not strong-named, so the CLR
-    /// ignores version when binding it (see the csproj).
-    ///
-    /// The ONLY safe compatibility check is to probe for the members themselves by reflection -
-    /// <c>typeof(KeybindBlock).GetMethod("AddTwoButtons")</c> and friends - and to make the API 3 calls
-    /// from a separate <c>[MethodImpl(MethodImplOptions.NoInlining)]</c> method, because the JIT resolves
-    /// call targets when it compiles a method, not when the call executes. Both consumers in this metarepo
-    /// do that; copy them rather than this property.
-    ///
-    /// What this IS good for: logging and diagnostics from code that already knows API 3 is present, and
-    /// as a plain version guard between two future releases that both expose it as a property.
+    /// It is NOT a compatibility gate and nothing branches on it. Every consumer in this metarepo is built
+    /// and deployed together with this assembly, so "the loaded registry might be older" is not a state
+    /// that can occur; a mismatched DLL is a deployment bug and should fail loudly, not be papered over.
     /// </summary>
     public static int ApiVersion => 3;
 
