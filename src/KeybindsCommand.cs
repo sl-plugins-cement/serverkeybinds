@@ -51,9 +51,13 @@ public sealed class KeybindsCommand : ICommand
             return false;
         }
 
-        string audit = KeybindRegistry.TryGetSendAudit(player!, out DateTime lastSendUtc, out int sentCount)
-            ? $"last send {lastSendUtc:HH:mm:ss} UTC with {sentCount} entries"
+        string audit = KeybindRegistry.TryGetSendAuditDetails(
+                player!, out DateTime lastSendUtc, out int sentCount, out string sendReason)
+            ? $"last send {lastSendUtc:HH:mm:ss} UTC with {sentCount} entries [{sendReason}]"
             : "no send recorded";
+        string acknowledgement = KeybindRegistry.IsAwaitingAcknowledgement(player!, out int ackAttempt)
+            ? $"awaiting acknowledgement after attempt {ackAttempt}"
+            : "no acknowledgement pending";
         string pressed = string.Join(", ", KeybindRegistry.PressedFor(player!));
         if (pressed.Length == 0)
         {
@@ -61,14 +65,14 @@ public sealed class KeybindsCommand : ICommand
         }
 
         ReferenceHub hub = player!.ReferenceHub;
-        // GetUserVersion == 0 means the client never acknowledged ANY settings pack - that is what
-        // separates "we never sent" from "we sent and something overwrote it afterwards".
+        // This is the client's accepted menu version, not a transport receipt. A registry-owned setting
+        // response is also accepted by the delivery coordinator as proof that the pack was processed.
         int userVersion = ServerSpecificSettingsSync.GetUserVersion(hub);
         bool tabOpen = ServerSpecificSettingsSync.IsTabOpenForUser(hub);
         int wouldReceive = KeybindRegistry.PersonalizedEntryCountFor(player);
 
         response = $"{player.Nickname} ({player.PlayerId}): would receive {wouldReceive} entries now; {audit}; " +
-            $"pressed latches: [{pressed}]; client ack version {userVersion} (0 = never acknowledged); " +
+            $"{acknowledgement}; pressed latches: [{pressed}]; client accepted version {userVersion}; " +
             $"settings tab open: {tabOpen}.";
         return true;
     }
