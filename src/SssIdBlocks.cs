@@ -65,6 +65,9 @@ public static class SssIdBlocks
     /// <summary>InvincibleWarMark active ability keybind.</summary>
     public const int InvincibleWarMark = 1120000;
 
+    /// <summary>SCP-966 and night vision equipment controls.</summary>
+    public const int Scp966 = 1140000;
+
     // --- The registry's own reserved block ---
 
     /// <summary>
