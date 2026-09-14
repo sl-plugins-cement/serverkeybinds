@@ -1,0 +1,19 @@
+[2026-09-14 11:10:49.175 +08:00] [INFO] [ServerKeybinds] [ServerKeybinds] 'Plugin Music' enabled block 24000 under Announcements [24001:插件音乐].
+[2026-09-14 11:11:23.182 +08:00] >>> /musicverify prepare
+[2026-09-14 11:11:23.259 +08:00] MUSICVERIFY#Prepared two listeners with independent shared music preferences.
+[2026-09-14 11:11:24.184 +08:00] >>> /musicverify play C:/Users/Michael/AppData/Local/Temp/plugin-music-release-hw2lx8p4/test-tone.wav
+[2026-09-14 11:11:24.214 +08:00] MUSICVERIFY#正在解析链接并替换当前播放...
+[2026-09-14 11:11:25.107 +08:00] >>> /sw omega
+[2026-09-14 11:11:25.138 +08:00] [INFO] [ScriptedWarhead] [ScriptedWarhead] Omega detonation scheduled 182 seconds after Omega trigger fallback.
+[2026-09-14 11:11:25.184 +08:00] SW#Omega sequence started; detonation 182 seconds after playback begins. / Omega 流程已启动；播放开始 182 秒后引爆。
+[2026-09-14 11:11:25.647 +08:00] [INFO] [ScriptedWarhead] [ScriptedWarhead] Omega detonation scheduled 182 seconds after actual native audio playback.
+[2026-09-14 11:11:25.662 +08:00] [INFO] [ScriptedWarhead] [ScriptedWarhead] Native Omega SpeakerToy started; CASSIE subtitle scheduled after 3.19 seconds and detonation after 182 seconds.
+[2026-09-14 11:11:25.677 +08:00] [INFO] [ScriptedWarhead] [ScriptedWarhead] Native Omega SpeakerToy started 180 seconds of audio on controller 255.
+[2026-09-14 11:11:38.151 +08:00] [INFO] [ReinforcementsSystem] [ReinforcementsSystem:Audio] Playing spawn clip 'C:\Users\Michael\AppData\Roaming\SCP Secret Laboratory\LabAPI\plugins\7777\assets/audio/nu7-spawn-music.wav' (77.5s) on speaker controller 71.
+[2026-09-14 11:11:38.167 +08:00] [INFO] [ReinforcementsSystem] [ReinforcementsSystem:Loadout] Cinematic music started; final spawn scheduled in 22.000s at music+22.000s.
+[2026-09-14 11:11:46.731 +08:00] >>> /musicverify check
+[2026-09-14 11:11:46.777 +08:00] MUSICVERIFY#PASS one setting; three playback integrations; isolated mute/unmute/remute on existing controllers 240,255,71
+[2026-09-14 11:12:44.926 +08:00] >>> /sw status
+[2026-09-14 11:12:44.942 +08:00] SW#Omega is active; detonation in 103 seconds. / Omega 已启动；103 秒后引爆。
+[2026-09-14 11:12:45.856 +08:00] >>> /musicverify cleanup
+[2026-09-14 11:12:45.916 +08:00] MUSICVERIFY#Cleaned up probe dummies and opt-outs.

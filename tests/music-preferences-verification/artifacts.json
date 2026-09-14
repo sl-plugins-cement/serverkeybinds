@@ -1,0 +1,11 @@
+{
+  "release_directory": "C:\\Users\\Michael\\AppData\\Local\\Temp\\plugin-music-release-hw2lx8p4",
+  "log": "C:\\Users\\Michael\\AppData\\Roaming\\SCP Secret Laboratory\\LocalAdminLogs\\7777\\LocalAdmin Log 2026-09-14 11.10.46.txt",
+  "runtime_files": 105,
+  "sha256": {
+    "ServerKeybinds.dll": "13a2bd9733780b8c542d76c339fc89ec343b5ae54e553638f2a9169ef5675068",
+    "GlobalMusicPlayer.dll": "7f9d0b6d10d087ca9ceec6aacca4b37bd3f6ed5f1a8d87cf986b1e65b8831dd1",
+    "ScriptedWarhead.dll": "9dde650c8ebd3fe1e93730ec3b1dbea74772c7ff108cd670980c5cf014cb9b93",
+    "ReinforcementsSystem.dll": "b2b85379aa7f7586c26485af70636196ef4e3466938134487e936613d16e3e52"
+  }
+}
