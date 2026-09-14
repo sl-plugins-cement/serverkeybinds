@@ -17,8 +17,16 @@ try
 {
     var alice = new Player("alice@steam");
     var bob = new Player("bob@steam");
+    var foreign = KeybindRegistry.ClaimBlock(24000, "conflicting consumer");
+    foreign.Enable();
+    bool collision = false;
+    try { PluginMusicPreferences.Acquire(); } catch (InvalidOperationException) { collision = true; }
+    Check(collision && ReferenceEquals(KeybindRegistry.Active, foreign), "registration failure preserves the existing block owner");
+    foreign.Disable();
     var reinforcements = PluginMusicPreferences.Acquire();
     var block = KeybindRegistry.Active!;
+    PlayerEvents.Disconnect(new Player(null!));
+    Check(KeybindRegistry.Active == block, "unauthenticated disconnect does not break shared settings");
     var omega = PluginMusicPreferences.Acquire();
     Check(ReferenceEquals(block, KeybindRegistry.Active), "multiple consumers register exactly one setting without GMP");
     Check(!block.Default(alice) && PluginMusicPreferences.CanReceiveMusic(bob), "new players hear music by default");

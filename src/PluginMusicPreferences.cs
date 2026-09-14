@@ -68,7 +68,11 @@ public static class PluginMusicPreferences
         ClientChoices[player.UserId] = muted;
     }
 
-    private static void OnLeft(PlayerLeftEventArgs ev) => ClientChoices.Remove(ev.Player.UserId);
+    private static void OnLeft(PlayerLeftEventArgs ev)
+    {
+        string? userId = ev.Player?.UserId;
+        if (!string.IsNullOrEmpty(userId)) ClientChoices.Remove(userId);
+    }
 
     private sealed class Lease : IDisposable
     {

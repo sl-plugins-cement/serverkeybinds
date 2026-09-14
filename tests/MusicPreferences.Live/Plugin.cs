@@ -51,6 +51,8 @@ public sealed class Probe : ICommand
             {
                 Require(arguments.Count == 2, "play requires a local audio file path");
                 _listening!.UserGroup = new UserGroup { Permissions = (ulong)PlayerPermissions.Broadcasting, BadgeText = "Music test", BadgeColor = "silver" };
+                // A local dummy has no RA authentication handshake. Enable its native RA access for this test sender.
+                _listening.ReferenceHub.serverRoles.RemoteAdmin = true;
                 response = Server.RunCommand("/gmp play " + arguments.At(1) + " --no-message", new PlayerCommandSender(_listening.ReferenceHub));
                 return true;
             }
