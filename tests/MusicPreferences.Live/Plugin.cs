@@ -4,6 +4,7 @@ using CommandSystem;
 using LabApi.Features.Wrappers;
 using Mirror;
 using NetworkManagerUtils.Dummies;
+using RemoteAdmin;
 using UserSettings.ServerSpecific;
 
 namespace ServerKeybinds.MusicPreferencesLive;
@@ -46,6 +47,13 @@ public sealed class Probe : ICommand
             }
             if (action == "cleanup") { Cleanup(); response = "Cleaned up probe dummies and opt-outs."; return true; }
             Require(_muted != null && _listening != null, "prepare first");
+            if (action == "play")
+            {
+                Require(arguments.Count == 2, "play requires a local audio file path");
+                _listening!.UserGroup = new UserGroup { Permissions = (ulong)PlayerPermissions.Broadcasting, BadgeText = "Music test", BadgeColor = "silver" };
+                response = Server.RunCommand("/gmp play " + arguments.At(1) + " --no-message", new PlayerCommandSender(_listening.ReferenceHub));
+                return true;
+            }
             Require(ServerSpecificSettingsSync.DefinedSettings.Count(x => x.SettingId == PluginMusicPreferences.SettingId) == 1,
                 "exactly one shared setting must be registered");
             SpeakerToy[] speakers = SpeakerToy.List.Where(x => !x.IsSpatial && x.ValidPlayers != null).ToArray();
