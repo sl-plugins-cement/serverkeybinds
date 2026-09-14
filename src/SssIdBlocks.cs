@@ -80,7 +80,7 @@ public static class SssIdBlocks
 
     // --- Config-driven toggle plugins (documented here so new blocks never land on them) ---
 
-    /// <summary>global-music-player mute toggle (currently 24000/24001).</summary>
+    /// <summary>Shared plugin music preference (24000/24001); retains the former GMP toggle ID and type.</summary>
     public const int GlobalMusic = 24000;
 
     /// <summary>MvpSystem music toggle (currently the bare id 300; re-home here when migrated).</summary>

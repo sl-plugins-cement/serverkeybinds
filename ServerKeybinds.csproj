@@ -8,9 +8,9 @@
          (PublicKeyToken=null), and the CLR ignores version, culture and token when binding those. An
          old consumer therefore still loads against a new DLL - which is why consumers must probe for
          API 4 members by reflection before calling them, not trust a version number. -->
-    <AssemblyVersion>4.0.0.0</AssemblyVersion>
-    <FileVersion>4.0.0.0</FileVersion>
-    <Version>4.0.0</Version>
+    <AssemblyVersion>5.0.0.0</AssemblyVersion>
+    <FileVersion>5.0.0.0</FileVersion>
+    <Version>5.0.0</Version>
     <Nullable>enable</Nullable>
     <AssemblyName>ServerKeybinds</AssemblyName>
     <RootNamespace>ServerKeybinds</RootNamespace>
@@ -18,6 +18,10 @@
          so it loads once into the single AppDomain (one shared keybind/dropdown/slider registry). -->
     <SCP_SL_MANAGED Condition="'$(SCP_SL_MANAGED)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</SCP_SL_MANAGED>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />

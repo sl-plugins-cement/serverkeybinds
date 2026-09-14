@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>MusicPreferences.Live</AssemblyName>
+    <Managed>C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</Managed>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../ServerKeybinds.csproj" Private="false" />
+    <Reference Include="LabApi" HintPath="$(Managed)/LabApi.dll" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(Managed)/Assembly-CSharp.dll" Private="false" />
+    <Reference Include="Assembly-CSharp-firstpass" HintPath="$(Managed)/Assembly-CSharp-firstpass.dll" Private="false" />
+    <Reference Include="Mirror" HintPath="$(Managed)/Mirror.dll" Private="false" />
+    <Reference Include="CommandSystem.Core" HintPath="$(Managed)/CommandSystem.Core.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(Managed)/UnityEngine.CoreModule.dll" Private="false" />
+  </ItemGroup>
+</Project>

@@ -4,7 +4,7 @@
 
 `ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library installed under LabAPI's `dependencies/global` directory, not a standalone gameplay plugin.
 
-API 4 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
+API 5 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
 
 Typical usage:
 
@@ -21,6 +21,45 @@ block.Enable();
 ```
 
 Call `Disable()` during plugin shutdown. Add a fixed base to `SssIdBlocks` before introducing a new consumer.
+
+### Shared plugin music (API 5)
+
+Players use **Announcements → Plugin music → On / Muted** to control music from
+ReinforcementsSystem, ScriptedWarhead (Omega), and Global Music Player together. The setting
+changes delivery during playback, without restarting tracks or changing cinematic/countdown timing.
+Reinforcement spatial sound effects and native game audio remain audible. Omega's custom MP3 is
+one mixed track: muting it also mutes speech embedded in that file; its separate subtitles and native
+fallback announcement remain enabled.
+
+ServerKeybinds owns this preference. GMP is only a consumer and is not required by the other plugins.
+The setting exists while at least one consumer is enabled. Disabling one consumer never removes it
+from the others. Install ServerKeybinds 5 with these consumer builds in LabAPI dependencies.
+
+Each consumer acquires a lease on enable and disposes it **after stopping its audio** on disable:
+
+```csharp
+IDisposable musicPreferences = PluginMusicPreferences.Acquire();
+// Set ControllerId first; the recipient predicate belongs to that controller's transmitter.
+speaker.ValidPlayers = player => ExistingAudience(player) && PluginMusicPreferences.CanReceiveMusic(player);
+// On shutdown: stop/destroy your speakers, then musicPreferences.Dispose().
+```
+
+Use this predicate for music only. Future plugins must explicitly integrate it; this is not an
+interceptor for unrelated audio. Labels follow `KeybindRegistry.Language` (empty/cn → Chinese, en → English).
+The native two-button type and ID **24001** retain default-ID GMP client preferences. Custom GMP IDs
+are no longer used. Opt-outs are atomically mirrored by UserId to
+`LabAPI/configs/<port>/ServerKeybinds/plugin_music_muted.txt`, read into memory before settings arrive.
+No file reads occur on the audio path. SSS choices are also saved by the native client.
+
+GMP's `gmpmute`/`gmpunmute` aliases set this same preference. Native client-owned settings cannot be
+repositioned from a server command: the menu may still display its previous choice. Duplicate menu
+responses do not undo a console change; a changed menu choice or the saved client choice on reconnect
+wins. Use the menu for a lasting client preference, and `gmpmute status` for the effective state.
+
+Native evidence: `../.references/LabAPI/LabApi/Features/Wrappers/AdminToys/SpeakerToy.cs` (`ValidPlayers`),
+`../.references/LabAPI/LabApi/Features/Audio/AudioTransmitter.cs` (`Update`, packet recipient filtering),
+and `../.references/Decompiled/DedicatedServer/Assembly-CSharp/UserSettings/ServerSpecific/SSTwoButtonsSetting.cs`
+(`SendValueUpdate` and `DeserializeUpdate` restrict value updates to server-only settings).
 
 ### Categories (API 3)
 
@@ -116,6 +155,25 @@ the tab can legitimately remain at version 0.
 API 4 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
 
 插件停用时必须调用 `Disable()`。新增使用者前，应先在 `SssIdBlocks` 中分配固定基址。
+
+### 共享插件音乐（API 5）
+
+玩家在 **公告 → 插件音乐 → 开启 / 静音** 中统一控制增援系统、Omega 核弹及全服音乐播放器的音乐。
+播放过程中切换立即影响后续音频包，不重启曲目，也不改变演出、字幕或核弹倒计时。
+增援空间音效及原生游戏声音不受影响。Omega 的 MP3 是混合音轨：静音也会屏蔽文件中的语音，
+但独立字幕及原生备用广播仍保留。
+
+设置由 ServerKeybinds 提供；GMP 只是使用者，其他插件不依赖 GMP。至少一个使用者启用时显示一个设置；
+停用其中一个不会影响其他使用者。请随这些插件构建一同安装 ServerKeybinds 5 依赖库。
+使用者启用时调用 `PluginMusicPreferences.Acquire()`，将 `CanReceiveMusic` 与原有听众条件取交集，
+停用时先停止并销毁音频，再释放租约。未来插件必须主动接入；不会拦截无关音频。
+界面语言遵循 `KeybindRegistry.Language`（空/cn 为中文，en 为英文）。
+
+保留原 GMP 默认双按钮类型及 ID **24001**；旧自定义 ID 不再使用。按 UserId 原子保存至
+`LabAPI/configs/<port>/ServerKeybinds/plugin_music_muted.txt`，在客户端设置到达前恢复，音频路径不读文件。
+客户端也会保存原生设置。GMP 的 `gmpmute` / `gmpunmute` 命令操作同一偏好，但原生客户端开关无法由服务器
+命令移动，因此菜单可能仍显示旧选项。重复回传不会撤销命令；更改菜单选项或重连后的客户端保存值优先。
+长期偏好请在菜单中设置，用 `gmpmute status` 查询实际状态。
 
 ### 分类（API 3）
 
