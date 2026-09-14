@@ -53,7 +53,11 @@ public sealed class Probe : ICommand
                 _listening!.UserGroup = new UserGroup { Permissions = (ulong)PlayerPermissions.Broadcasting, BadgeText = "Music test", BadgeColor = "silver" };
                 // A local dummy has no RA authentication handshake. Enable its native RA access for this test sender.
                 _listening.ReferenceHub.serverRoles.RemoteAdmin = true;
-                response = Server.RunCommand("/gmp play " + arguments.At(1) + " --no-message", new PlayerCommandSender(_listening.ReferenceHub));
+                _listening.ReferenceHub.serverRoles.Permissions = (ulong)PlayerPermissions.Broadcasting;
+                var playerSender = new PlayerCommandSender(_listening.ReferenceHub);
+                Require(Player.Get(playerSender) == _listening, "native sender resolved to a different player");
+                Require(_listening.RemoteAdminAccess && _listening.HasPermission(PlayerPermissions.Broadcasting), "test admin permissions were not applied");
+                response = Server.RunCommand("/gmp play " + arguments.At(1) + " --no-message", playerSender);
                 return true;
             }
             Require(ServerSpecificSettingsSync.DefinedSettings.Count(x => x.SettingId == PluginMusicPreferences.SettingId) == 1,

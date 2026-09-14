@@ -71,7 +71,7 @@ public static class PluginMusicPreferences
     private static void OnLeft(PlayerLeftEventArgs ev)
     {
         string? userId = ev.Player?.UserId;
-        if (!string.IsNullOrEmpty(userId)) ClientChoices.Remove(userId);
+        if (userId != null) ClientChoices.Remove(userId);
     }
 
     private sealed class Lease : IDisposable

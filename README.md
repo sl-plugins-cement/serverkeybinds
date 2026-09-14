@@ -57,7 +57,7 @@ responses do not undo a console change; a changed menu choice or the saved clien
 wins. Use the menu for a lasting client preference, and `gmpmute status` for the effective state.
 
 Native evidence: `../.references/LabAPI/LabApi/Features/Wrappers/AdminToys/SpeakerToy.cs` (`ValidPlayers`),
-`../.references/LabAPI/LabApi/Features/Audio/AudioTransmitter.cs` (`Update`, packet recipient filtering),
+`../.references/LabAPI/LabApi/Features/Audio/AudioTransmitter.cs` (`Transmit`, packet recipient filtering),
 and `../.references/Decompiled/DedicatedServer/Assembly-CSharp/UserSettings/ServerSpecific/SSTwoButtonsSetting.cs`
 (`SendValueUpdate` and `DeserializeUpdate` restrict value updates to server-only settings).
 
