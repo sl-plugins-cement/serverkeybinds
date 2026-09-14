@@ -50,6 +50,12 @@ public sealed class Probe : ICommand
             if (action == "play")
             {
                 Require(arguments.Count == 2, "play requires a local audio file path");
+                // Dummy authentication assigns ID_Dummy on its first update, after SpawnDummy returns.
+                // Reapply distinct test identities after that initialization has completed.
+                _muted!.ReferenceHub.authManager.UserId = "music-test-muted@local-test";
+                _listening!.ReferenceHub.authManager.UserId = "music-test-listening@local-test";
+                PluginMusicPreferences.SetMuted(_muted, true);
+                PluginMusicPreferences.SetMuted(_listening, false);
                 _listening!.UserGroup = new UserGroup { Permissions = (ulong)PlayerPermissions.Broadcasting, BadgeText = "Music test", BadgeColor = "silver" };
                 // A local dummy has no RA authentication handshake. Enable its native RA access for this test sender.
                 _listening.ReferenceHub.serverRoles.RemoteAdmin = true;
