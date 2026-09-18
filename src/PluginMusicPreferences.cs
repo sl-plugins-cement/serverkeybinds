@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using LabApi.Events.Arguments.PlayerEvents;
 using LabApi.Events.Handlers;
 using LabApi.Features.Wrappers;
@@ -18,7 +17,9 @@ namespace ServerKeybinds;
 /// A speaker's volume is one network value shared by every listener, so per-player volume is delivered
 /// by running one speaker per step and routing each listener to the speaker of their step:
 /// <c>speaker[step].ValidPlayers = p =&gt; Audience(p) &amp;&amp; CanReceiveMusic(p) &amp;&amp; VolumeStepOf(p) == step</c>.
-/// Consumers that keep a single speaker simply ignore the step and play at full volume.
+/// The menu control is a percentage slider; its value snaps to the nearest step because a speaker
+/// cannot carry a different volume per listener. Consumers that keep a single speaker simply ignore
+/// the step and play at full volume.
 /// </summary>
 public static class PluginMusicPreferences
 {
@@ -27,6 +28,10 @@ public static class PluginMusicPreferences
 
     /// <summary>Volume multipliers by step; step 0 is the default. Consumers spawn one speaker per entry.</summary>
     public static readonly IReadOnlyList<float> VolumeSteps = new[] { 1f, 0.75f, 0.5f, 0.25f };
+
+    /// <summary>Slider range shown to players, in percent.</summary>
+    public const float VolumeSliderMin = 25f;
+    public const float VolumeSliderMax = 100f;
 
     private static MusicPreferenceStore? _store;
     private static KeybindBlock? _block;
@@ -55,10 +60,10 @@ public static class PluginMusicPreferences
                     english ? "Mute music from participating plugins for yourself. Gameplay sounds are unaffected."
                         : "仅为自己静音已接入插件的音乐，不影响游戏音效。",
                     OnClientMuteChoice)
-                .AddDropdown(2, english ? "Plugin music volume" : "插件音乐音量",
-                    VolumeSteps.Select(step => $"{step * 100f:0}%").ToArray(), 0,
-                    english ? "Volume of music from participating plugins, for you only."
-                        : "仅为自己调整已接入插件的音乐音量。",
+                .AddSlider(2, english ? "Plugin music volume" : "插件音乐音量",
+                    VolumeSliderMin, VolumeSliderMax, VolumeSliderMax, true, "0", "{0}%",
+                    english ? "Volume of music from participating plugins, for you only. Applies in 25% steps."
+                        : "仅为自己调整已接入插件的音乐音量，按 25% 一档生效。",
                     OnClientVolumeChoice);
             try { block.Enable(); }
             catch { if (block.Active) block.Disable(); throw; }
@@ -83,6 +88,24 @@ public static class PluginMusicPreferences
 
     /// <summary>The player's volume multiplier. Mute is separate: check <see cref="CanReceiveMusic"/> first.</summary>
     public static float VolumeOf(Player player) => VolumeSteps[VolumeStepOf(player)];
+
+    /// <summary>The step whose multiplier is closest to <paramref name="percent"/> (0-100).</summary>
+    public static int NearestVolumeStep(float percent)
+    {
+        if (float.IsNaN(percent)) return 0;
+        int best = 0;
+        float bestDistance = float.MaxValue;
+        for (int step = 0; step < VolumeSteps.Count; step++)
+        {
+            float distance = Math.Abs(VolumeSteps[step] * 100f - percent);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = step;
+            }
+        }
+        return best;
+    }
 
     /// <summary>
     /// Persists a console/API choice. Native client-owned toggles cannot be set by the server;
@@ -111,9 +134,9 @@ public static class PluginMusicPreferences
         ClientMuteChoices[player.UserId] = muted;
     }
 
-    private static void OnClientVolumeChoice(Player player, int step)
+    private static void OnClientVolumeChoice(Player player, float percent)
     {
-        if (step < 0 || step >= VolumeSteps.Count) return;
+        int step = NearestVolumeStep(percent);
         if (ClientVolumeChoices.TryGetValue(player.UserId, out int previous) && previous == step) return;
         SetVolumeStep(player, step);
         ClientVolumeChoices[player.UserId] = step;

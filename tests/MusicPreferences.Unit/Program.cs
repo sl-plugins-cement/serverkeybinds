@@ -58,21 +58,26 @@ try
     using (PluginMusicPreferences.Acquire())
     {
         var volumeBlock = KeybindRegistry.Active!;
-        Check(volumeBlock.VolumeOptions.SequenceEqual(new[] { "100%", "75%", "50%", "25%" }), "volume dropdown lists every step as a percentage");
+        Check(volumeBlock.SliderMin == 25f && volumeBlock.SliderMax == 100f, "volume slider spans 25-100 percent");
         Check(PluginMusicPreferences.VolumeStepOf(bob) == 0 && PluginMusicPreferences.VolumeOf(bob) == 1f, "players start at full volume");
         int notified = -1;
         Action<Player, int> onChanged = (player, step) => { if (player == bob) notified = step; };
         PluginMusicPreferences.VolumeStepChanged += onChanged;
-        volumeBlock.ReceiveVolume(bob, 2);
+        volumeBlock.ReceiveVolume(bob, 50f);
         Check(PluginMusicPreferences.VolumeStepOf(bob) == 2 && PluginMusicPreferences.VolumeOf(bob) == 0.5f && notified == 2, "menu volume choice applies immediately and notifies consumers");
         notified = -1;
-        volumeBlock.ReceiveVolume(bob, 2);
+        volumeBlock.ReceiveVolume(bob, 50f);
         Check(notified == -1, "duplicate volume response does not re-notify");
+        volumeBlock.ReceiveVolume(bob, 63f);
+        Check(PluginMusicPreferences.VolumeStepOf(bob) == 1 && notified == 1, "slider values snap to the nearest step");
+        volumeBlock.ReceiveVolume(bob, 50f);
         Func<Player, bool> halfSpeaker = player => PluginMusicPreferences.CanReceiveMusic(player) && PluginMusicPreferences.VolumeStepOf(player) == 2;
         Func<Player, bool> fullSpeaker = player => PluginMusicPreferences.CanReceiveMusic(player) && PluginMusicPreferences.VolumeStepOf(player) == 0;
         Check(halfSpeaker(bob) && !fullSpeaker(bob), "tiered speaker predicates route a listener to exactly one speaker");
-        volumeBlock.ReceiveVolume(bob, 9);
-        Check(PluginMusicPreferences.VolumeStepOf(bob) == 2, "out-of-range volume responses are ignored");
+        volumeBlock.ReceiveVolume(bob, 9f);
+        Check(PluginMusicPreferences.VolumeStepOf(bob) == 3, "values below the range snap to the lowest step");
+        Check(PluginMusicPreferences.NearestVolumeStep(999f) == 0 && PluginMusicPreferences.NearestVolumeStep(float.NaN) == 0, "values above the range and NaN resolve to full volume");
+        volumeBlock.ReceiveVolume(bob, 50f);
         PluginMusicPreferences.SetVolumeStep(bob, 0);
         Check(PluginMusicPreferences.VolumeOf(bob) == 1f && notified == 0, "console reset returns to full volume");
         PluginMusicPreferences.SetVolumeStep(bob, 3);

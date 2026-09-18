@@ -44,10 +44,11 @@ speaker.ValidPlayers = player => ExistingAudience(player) && PluginMusicPreferen
 // On shutdown: stop/destroy your speakers, then musicPreferences.Dispose().
 ```
 
-**Volume (API 6).** The same block also offers **Plugin music volume → 100% / 75% / 50% / 25%** at ID
+**Volume (API 6).** The same block also offers a **Plugin music volume** slider (25-100%) at ID
 **24002** (`PluginMusicPreferences.VolumeSettingId`). A speaker's volume is one network value every listener
-shares, so a consumer delivers per-player volume by running one speaker per entry of
-`PluginMusicPreferences.VolumeSteps` and routing each listener to exactly one of them:
+shares, so the slider value snaps to the nearest entry of `PluginMusicPreferences.VolumeSteps`
+(100/75/50/25%, `NearestVolumeStep`), and a consumer delivers per-player volume by running one speaker per
+step and routing each listener to exactly one of them:
 
 ```csharp
 for (int step = 0; step < PluginMusicPreferences.VolumeSteps.Count; step++)
@@ -191,8 +192,9 @@ API 6 支持分组标题、按键绑定、下拉菜单、滑条、原生双按�
 使用者启用时调用 `PluginMusicPreferences.Acquire()`，将 `CanReceiveMusic` 与原有听众条件取交集，
 停用时先停止并销毁音频，再释放租约。未来插件必须主动接入；不会拦截无关音频。
 
-**音量（API 6）。** 同一区块还提供 **插件音乐音量 → 100% / 75% / 50% / 25%**（ID **24002**，
-`PluginMusicPreferences.VolumeSettingId`）。扬声器音量是所有听众共享的同一个网络值，因此使用者需要按
+**音量（API 6）。** 同一区块还提供 **插件音乐音量** 滑块（25-100%，ID **24002**，
+`PluginMusicPreferences.VolumeSettingId`），滑块值会吸附到 `VolumeSteps` 最近的一档（100/75/50/25%，
+`NearestVolumeStep`）。扬声器音量是所有听众共享的同一个网络值，因此使用者需要按
 `PluginMusicPreferences.VolumeSteps` 的每个档位各建一个扬声器，并用 `VolumeStepOf(player) == 档位`
 把每名玩家路由到其中一个，同一帧向所有扬声器喂入相同采样即可保持同步。`VolumeStepOf` / `VolumeOf`
 可在音频线程调用；`SetVolumeStep` 保存控制台选择，`VolumeStepChanged` 在游戏线程触发。档位按 UserId
