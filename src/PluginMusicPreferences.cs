@@ -9,29 +9,22 @@ using LabApi.Loader.Features.Paths;
 namespace ServerKeybinds;
 
 /// <summary>
-/// Shared music preferences: an opt-out toggle and a per-player volume step. Acquire one lease per
+/// Shared music preferences: an opt-out toggle and a per-player volume percent. Acquire one lease per
 /// enabled consumer and dispose it after stopping audio. Call lifecycle and setting mutations on the
 /// game thread. Recipient queries are safe on audio threads. This service owns preferences only; each
 /// plugin still owns its playback and timeline.
 ///
-/// A speaker's volume is one network value shared by every listener, so per-player volume is delivered
-/// by running one speaker per step and routing each listener to the speaker of their step:
-/// <c>speaker[step].ValidPlayers = p =&gt; Audience(p) &amp;&amp; CanReceiveMusic(p) &amp;&amp; VolumeStepOf(p) == step</c>.
-/// The menu control is a percentage slider; its value snaps to the nearest step because a speaker
-/// cannot carry a different volume per listener. Consumers that keep a single speaker simply ignore
-/// the step and play at full volume.
+/// A speaker's network volume is one value every listener shares, so per-listener volume is applied
+/// server-side: scale the PCM frame by <see cref="VolumeOf"/> before Opus-encoding, grouping listeners
+/// with the same percent so each distinct value costs one encode, and send each group its own packet
+/// on the same controller id. A consumer that keeps the stock single-stream transmitter plays at full
+/// volume for everyone; the mute still applies through <see cref="CanReceiveMusic"/>.
 /// </summary>
 public static class PluginMusicPreferences
 {
     public const int SettingId = SssIdBlocks.GlobalMusic + 1;
     public const int VolumeSettingId = SssIdBlocks.GlobalMusic + 2;
-
-    /// <summary>Volume multipliers by step; step 0 is the default. Consumers spawn one speaker per entry.</summary>
-    public static readonly IReadOnlyList<float> VolumeSteps = new[] { 1f, 0.75f, 0.5f, 0.25f };
-
-    /// <summary>Slider range shown to players, in percent.</summary>
-    public const float VolumeSliderMin = 25f;
-    public const float VolumeSliderMax = 100f;
+    public const int DefaultVolumePercent = MusicPreferenceStore.DefaultVolumePercent;
 
     private static MusicPreferenceStore? _store;
     private static KeybindBlock? _block;
@@ -39,8 +32,8 @@ public static class PluginMusicPreferences
     private static readonly Dictionary<string, bool> ClientMuteChoices = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, int> ClientVolumeChoices = new(StringComparer.Ordinal);
 
-    /// <summary>Raised on the game thread after a player's volume step changed, with the new step.</summary>
-    public static event Action<Player, int>? VolumeStepChanged;
+    /// <summary>Raised on the game thread after a player's volume percent changed, with the new value.</summary>
+    public static event Action<Player, int>? VolumePercentChanged;
 
     public static IDisposable Acquire()
     {
@@ -61,9 +54,9 @@ public static class PluginMusicPreferences
                         : "仅为自己静音已接入插件的音乐，不影响游戏音效。",
                     OnClientMuteChoice)
                 .AddSlider(2, english ? "Plugin music volume" : "插件音乐音量",
-                    VolumeSliderMin, VolumeSliderMax, VolumeSliderMax, true, "0", "{0}%",
-                    english ? "Volume of music from participating plugins, for you only. Applies in 25% steps."
-                        : "仅为自己调整已接入插件的音乐音量，按 25% 一档生效。",
+                    0f, 100f, DefaultVolumePercent, true, "0", "{0}%",
+                    english ? "Volume of music from participating plugins, for you only."
+                        : "仅为自己调整已接入插件的音乐音量。",
                     OnClientVolumeChoice);
             try { block.Enable(); }
             catch { if (block.Active) block.Disable(); throw; }
@@ -79,33 +72,11 @@ public static class PluginMusicPreferences
     /// <summary>Compose this with any existing audience predicate, never replace audience restrictions.</summary>
     public static bool CanReceiveMusic(Player player) => player != null && !IsMuted(player);
 
-    /// <summary>The player's chosen index into <see cref="VolumeSteps"/>; 0 until they pick something else.</summary>
-    public static int VolumeStepOf(Player player)
-    {
-        int step = player == null ? 0 : (_store?.VolumeStep(player.UserId) ?? 0);
-        return step >= 0 && step < VolumeSteps.Count ? step : 0;
-    }
+    /// <summary>The player's chosen volume, 0-100; 100 until they move the slider.</summary>
+    public static int VolumePercentOf(Player player) => player == null ? DefaultVolumePercent : (_store?.VolumePercent(player.UserId) ?? DefaultVolumePercent);
 
-    /// <summary>The player's volume multiplier. Mute is separate: check <see cref="CanReceiveMusic"/> first.</summary>
-    public static float VolumeOf(Player player) => VolumeSteps[VolumeStepOf(player)];
-
-    /// <summary>The step whose multiplier is closest to <paramref name="percent"/> (0-100).</summary>
-    public static int NearestVolumeStep(float percent)
-    {
-        if (float.IsNaN(percent)) return 0;
-        int best = 0;
-        float bestDistance = float.MaxValue;
-        for (int step = 0; step < VolumeSteps.Count; step++)
-        {
-            float distance = Math.Abs(VolumeSteps[step] * 100f - percent);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = step;
-            }
-        }
-        return best;
-    }
+    /// <summary>The player's volume multiplier, 0-1. Mute is separate: check <see cref="CanReceiveMusic"/> first.</summary>
+    public static float VolumeOf(Player player) => VolumePercentOf(player) / 100f;
 
     /// <summary>
     /// Persists a console/API choice. Native client-owned toggles cannot be set by the server;
@@ -117,14 +88,14 @@ public static class PluginMusicPreferences
         _store.SetMuted(player.UserId, muted);
     }
 
-    /// <summary>Persists a volume step (an index into <see cref="VolumeSteps"/>) and notifies consumers.</summary>
-    public static void SetVolumeStep(Player player, int step)
+    /// <summary>Persists a volume percent (0-100) and notifies consumers when it changed.</summary>
+    public static void SetVolumePercent(Player player, int percent)
     {
         if (_consumers == 0 || _store == null) throw new InvalidOperationException("No music preference consumer is enabled.");
-        if (step < 0 || step >= VolumeSteps.Count) throw new ArgumentOutOfRangeException(nameof(step));
-        int previous = _store.VolumeStep(player.UserId);
-        _store.SetVolumeStep(player.UserId, step);
-        if (previous != step) VolumeStepChanged?.Invoke(player, step);
+        if (percent < 0 || percent > 100) throw new ArgumentOutOfRangeException(nameof(percent));
+        int previous = _store.VolumePercent(player.UserId);
+        _store.SetVolumePercent(player.UserId, percent);
+        if (previous != percent) VolumePercentChanged?.Invoke(player, percent);
     }
 
     private static void OnClientMuteChoice(Player player, bool muted)
@@ -134,12 +105,13 @@ public static class PluginMusicPreferences
         ClientMuteChoices[player.UserId] = muted;
     }
 
-    private static void OnClientVolumeChoice(Player player, float percent)
+    private static void OnClientVolumeChoice(Player player, float value)
     {
-        int step = NearestVolumeStep(percent);
-        if (ClientVolumeChoices.TryGetValue(player.UserId, out int previous) && previous == step) return;
-        SetVolumeStep(player, step);
-        ClientVolumeChoices[player.UserId] = step;
+        if (float.IsNaN(value)) return;
+        int percent = Math.Max(0, Math.Min(100, (int)Math.Round(value)));
+        if (ClientVolumeChoices.TryGetValue(player.UserId, out int previous) && previous == percent) return;
+        SetVolumePercent(player, percent);
+        ClientVolumeChoices[player.UserId] = percent;
     }
 
     private static void OnLeft(PlayerLeftEventArgs ev)

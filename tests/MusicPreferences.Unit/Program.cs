@@ -58,33 +58,27 @@ try
     using (PluginMusicPreferences.Acquire())
     {
         var volumeBlock = KeybindRegistry.Active!;
-        Check(volumeBlock.SliderMin == 25f && volumeBlock.SliderMax == 100f, "volume slider spans 25-100 percent");
-        Check(PluginMusicPreferences.VolumeStepOf(bob) == 0 && PluginMusicPreferences.VolumeOf(bob) == 1f, "players start at full volume");
+        Check(volumeBlock.SliderMin == 0f && volumeBlock.SliderMax == 100f, "volume slider spans 0-100 percent");
+        Check(PluginMusicPreferences.VolumePercentOf(bob) == 100 && PluginMusicPreferences.VolumeOf(bob) == 1f, "players start at full volume");
         int notified = -1;
-        Action<Player, int> onChanged = (player, step) => { if (player == bob) notified = step; };
-        PluginMusicPreferences.VolumeStepChanged += onChanged;
-        volumeBlock.ReceiveVolume(bob, 50f);
-        Check(PluginMusicPreferences.VolumeStepOf(bob) == 2 && PluginMusicPreferences.VolumeOf(bob) == 0.5f && notified == 2, "menu volume choice applies immediately and notifies consumers");
+        Action<Player, int> onChanged = (player, percent) => { if (player == bob) notified = percent; };
+        PluginMusicPreferences.VolumePercentChanged += onChanged;
+        volumeBlock.ReceiveVolume(bob, 37f);
+        Check(PluginMusicPreferences.VolumePercentOf(bob) == 37 && Math.Abs(PluginMusicPreferences.VolumeOf(bob) - 0.37f) < 0.001f && notified == 37, "slider choice applies immediately and notifies consumers");
         notified = -1;
-        volumeBlock.ReceiveVolume(bob, 50f);
+        volumeBlock.ReceiveVolume(bob, 37f);
         Check(notified == -1, "duplicate volume response does not re-notify");
-        volumeBlock.ReceiveVolume(bob, 63f);
-        Check(PluginMusicPreferences.VolumeStepOf(bob) == 1 && notified == 1, "slider values snap to the nearest step");
-        volumeBlock.ReceiveVolume(bob, 50f);
-        Func<Player, bool> halfSpeaker = player => PluginMusicPreferences.CanReceiveMusic(player) && PluginMusicPreferences.VolumeStepOf(player) == 2;
-        Func<Player, bool> fullSpeaker = player => PluginMusicPreferences.CanReceiveMusic(player) && PluginMusicPreferences.VolumeStepOf(player) == 0;
-        Check(halfSpeaker(bob) && !fullSpeaker(bob), "tiered speaker predicates route a listener to exactly one speaker");
-        volumeBlock.ReceiveVolume(bob, 9f);
-        Check(PluginMusicPreferences.VolumeStepOf(bob) == 3, "values below the range snap to the lowest step");
-        Check(PluginMusicPreferences.NearestVolumeStep(999f) == 0 && PluginMusicPreferences.NearestVolumeStep(float.NaN) == 0, "values above the range and NaN resolve to full volume");
-        volumeBlock.ReceiveVolume(bob, 50f);
-        PluginMusicPreferences.SetVolumeStep(bob, 0);
-        Check(PluginMusicPreferences.VolumeOf(bob) == 1f && notified == 0, "console reset returns to full volume");
-        PluginMusicPreferences.SetVolumeStep(bob, 3);
-        PluginMusicPreferences.VolumeStepChanged -= onChanged;
+        volumeBlock.ReceiveVolume(bob, 250f);
+        Check(PluginMusicPreferences.VolumePercentOf(bob) == 100, "out-of-range slider values clamp");
+        volumeBlock.ReceiveVolume(bob, 0f);
+        Check(PluginMusicPreferences.VolumeOf(bob) == 0f, "zero percent is a valid silent choice");
+        PluginMusicPreferences.SetVolumePercent(bob, 100);
+        Check(PluginMusicPreferences.VolumeOf(bob) == 1f && notified == 100, "console reset returns to full volume");
+        PluginMusicPreferences.SetVolumePercent(bob, 25);
+        PluginMusicPreferences.VolumePercentChanged -= onChanged;
     }
     using (PluginMusicPreferences.Acquire())
-        Check(PluginMusicPreferences.VolumeOf(bob) == 0.25f, "volume step survives full service reload");
+        Check(PluginMusicPreferences.VolumeOf(bob) == 0.25f, "volume percent survives full service reload");
 
     string storePath = Path.Combine(root, "isolated", "muted.txt");
     string volumePath = Path.Combine(root, "isolated", "volume.txt");
@@ -92,14 +86,14 @@ try
     store.SetMuted("alice@steam", true);
     store.SetMuted("bob@steam", true);
     store.SetMuted("alice@steam", false);
-    store.SetVolumeStep("alice@steam", 3);
-    store.SetVolumeStep("bob@steam", 1);
-    store.SetVolumeStep("bob@steam", 0);
+    store.SetVolumePercent("alice@steam", 30);
+    store.SetVolumePercent("bob@steam", 10);
+    store.SetVolumePercent("bob@steam", 100);
     var restored = new MusicPreferenceStore(storePath, volumePath);
     Check(!restored.IsMuted("alice@steam") && restored.IsMuted("bob@steam"), "atomic replacement persists mute and unmute independently");
-    Check(restored.VolumeStep("alice@steam") == 3 && restored.VolumeStep("bob@steam") == 0, "volume steps persist and a reset step is dropped from disk");
+    Check(restored.VolumePercent("alice@steam") == 30 && restored.VolumePercent("bob@steam") == 100, "volume percents persist and the default is dropped from disk");
     bool tabRejected = false;
-    try { store.SetVolumeStep("tab	user", 1); } catch (ArgumentException) { tabRejected = true; }
+    try { store.SetVolumePercent("tab	user", 1); } catch (ArgumentException) { tabRejected = true; }
     Check(tabRejected, "a tab in the identity cannot corrupt the volume record format");
     bool rejected = false;
     try { store.SetMuted("injected\nuser", true); } catch (ArgumentException) { rejected = true; }

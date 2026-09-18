@@ -4,7 +4,7 @@
 
 `ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library installed under LabAPI's `dependencies/global` directory, not a standalone gameplay plugin.
 
-API 6 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. API 6 adds a shared per-player music volume step beside the API 5 mute toggle. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
+API 6 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. API 6 adds a shared per-player music volume slider beside the API 5 mute toggle. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
 
 Typical usage:
 
@@ -44,29 +44,16 @@ speaker.ValidPlayers = player => ExistingAudience(player) && PluginMusicPreferen
 // On shutdown: stop/destroy your speakers, then musicPreferences.Dispose().
 ```
 
-**Volume (API 6).** The same block also offers a **Plugin music volume** slider (25-100%) at ID
-**24002** (`PluginMusicPreferences.VolumeSettingId`). A speaker's volume is one network value every listener
-shares, so the slider value snaps to the nearest entry of `PluginMusicPreferences.VolumeSteps`
-(100/75/50/25%, `NearestVolumeStep`), and a consumer delivers per-player volume by running one speaker per
-step and routing each listener to exactly one of them:
-
-```csharp
-for (int step = 0; step < PluginMusicPreferences.VolumeSteps.Count; step++)
-{
-    int captured = step;
-    speaker[step].ControllerId = (byte)(baseId + step);
-    speaker[step].Volume = master * PluginMusicPreferences.VolumeSteps[step];
-    speaker[step].ValidPlayers = p => Audience(p) && PluginMusicPreferences.CanReceiveMusic(p)
-                                       && PluginMusicPreferences.VolumeStepOf(p) == captured;
-}
-// Feed every speaker the same samples in the same frame; the transmitters stay in lockstep.
-```
-
-`VolumeStepOf(player)` / `VolumeOf(player)` are safe on audio threads; `SetVolumeStep(player, step)` persists a
-console choice and `VolumeStepChanged` fires on the game thread. Steps are mirrored by UserId to
-`LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt` (`userId<TAB>step`, step 0 is absent).
-A consumer that keeps a single speaker ignores the step and plays at full volume; today only Global Music
-Player is tiered.
+**Volume (API 6).** The same block also offers a **Plugin music volume** slider (0-100%) at ID **24002**
+(`PluginMusicPreferences.VolumeSettingId`). A speaker's network volume is one value every listener shares,
+so a consumer applies the preference server-side: scale each PCM frame by `VolumeOf(player)` before Opus
+encoding, group listeners with the same percent so each distinct value costs one encode, and send each
+group its own `AudioMessage` on the same controller id (Global Music Player's `PerListenerTransmitter`
+is the reference). `VolumePercentOf` / `VolumeOf` are safe on audio threads; `SetVolumePercent` persists a
+console choice and `VolumePercentChanged` fires on the game thread. Values are mirrored by UserId to
+`LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt` (`userId<TAB>percent`; 100 is absent).
+A consumer that keeps the stock single-stream transmitter plays at full volume for everyone; the mute
+still applies through `CanReceiveMusic`.
 
 Use this predicate for music only. Future plugins must explicitly integrate it; this is not an
 interceptor for unrelated audio. Labels follow `KeybindRegistry.Language` (empty/cn → Chinese, en → English).
@@ -176,7 +163,7 @@ the tab can legitimately remain at version 0.
 
 `ServerKeybinds.dll` 是元仓库插件使用的 SCP:SL“服务器专属设置”进程级唯一管理器。它是安装在 LabAPI `dependencies/global` 目录中的共享依赖库，不是独立游戏插件。
 
-API 6 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性，并在 API 5 的静音开关旁新增每人独立的音乐音量档位；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
+API 6 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性，并在 API 5 的静音开关旁新增每人独立的音乐音量滑块；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
 
 插件停用时必须调用 `Disable()`。新增使用者前，应先在 `SssIdBlocks` 中分配固定基址。
 
@@ -192,21 +179,14 @@ API 6 支持分组标题、按键绑定、下拉菜单、滑条、原生双按�
 使用者启用时调用 `PluginMusicPreferences.Acquire()`，将 `CanReceiveMusic` 与原有听众条件取交集，
 停用时先停止并销毁音频，再释放租约。未来插件必须主动接入；不会拦截无关音频。
 
-**音量（API 6）。** 同一区块还提供 **插件音乐音量** 滑块（25-100%，ID **24002**，
-`PluginMusicPreferences.VolumeSettingId`），滑块值会吸附到 `VolumeSteps` 最近的一档（100/75/50/25%，
-`NearestVolumeStep`）。扬声器音量是所有听众共享的同一个网络值，因此使用者需要按
-`PluginMusicPreferences.VolumeSteps` 的每个档位各建一个扬声器，并用 `VolumeStepOf(player) == 档位`
-把每名玩家路由到其中一个，同一帧向所有扬声器喂入相同采样即可保持同步。`VolumeStepOf` / `VolumeOf`
-可在音频线程调用；`SetVolumeStep` 保存控制台选择，`VolumeStepChanged` 在游戏线程触发。档位按 UserId
-镜像到 `LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt`（`userId<TAB>档位`，档位 0 不保存）。
-仍使用单个扬声器的使用者忽略档位、按全音量播放；目前只有 Global Music Player 采用多扬声器。
-界面语言遵循 `KeybindRegistry.Language`（空/cn 为中文，en 为英文）。
-
-保留原 GMP 默认双按钮类型及 ID **24001**；旧自定义 ID 不再使用。按 UserId 原子保存至
-`LabAPI/configs/<port>/ServerKeybinds/plugin_music_muted.txt`，在客户端设置到达前恢复，音频路径不读文件。
-客户端也会保存原生设置。GMP 的 `gmpmute` / `gmpunmute` 命令操作同一偏好，但原生客户端开关无法由服务器
-命令移动，因此菜单可能仍显示旧选项。重复回传不会撤销命令；更改菜单选项或重连后的客户端保存值优先。
-长期偏好请在菜单中设置，用 `gmpmute status` 查询实际状态。
+**音量（API 6）。** 同一区块还提供 **插件音乐音量** 滑块（0-100%，ID **24002**，
+`PluginMusicPreferences.VolumeSettingId`）。扬声器的网络音量是所有听众共享的同一个值，因此使用者在服务端
+应用该偏好：在 Opus 编码前按 `VolumeOf(player)` 缩放每个音频帧，把音量相同的听众分为一组，每组只编码一次并
+在同一控制器 ID 上单独发送 `AudioMessage`（参考 Global Music Player 的 `PerListenerTransmitter`）。
+`VolumePercentOf` / `VolumeOf` 可在音频线程调用；`SetVolumePercent` 保存控制台选择，`VolumePercentChanged`
+在游戏线程触发。取值按 UserId 镜像到 `LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt`
+（`userId<TAB>百分比`，100 不保存）。仍使用原生单流发送器的使用者按全音量播放；静音仍通过
+`CanReceiveMusic` 生效。
 
 ### 分类（API 3）
 

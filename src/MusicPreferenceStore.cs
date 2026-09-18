@@ -8,30 +8,33 @@ using System.Text;
 namespace ServerKeybinds;
 
 /// <summary>
-/// Port-local durable music preferences: an opt-out set and a per-player volume step. Reads never
+/// Port-local durable music preferences: an opt-out set and a per-player volume percent. Reads never
 /// touch the disk; every write replaces the whole file atomically and only updates memory on success.
 /// </summary>
 internal sealed class MusicPreferenceStore
 {
+    public const int DefaultVolumePercent = 100;
+
     private readonly string _mutedPath;
     private readonly string _volumePath;
     private readonly object _gate = new();
     private readonly HashSet<string> _muted;
-    private readonly Dictionary<string, int> _volumeSteps;
+    private readonly Dictionary<string, int> _volumes;
 
     public MusicPreferenceStore(string mutedPath, string volumePath)
     {
         _mutedPath = mutedPath;
         _volumePath = volumePath;
         _muted = new HashSet<string>(ReadLines(mutedPath).Where(x => !string.IsNullOrWhiteSpace(x)), StringComparer.Ordinal);
-        _volumeSteps = new Dictionary<string, int>(StringComparer.Ordinal);
+        _volumes = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string line in ReadLines(volumePath))
         {
             int tab = line.LastIndexOf('\t');
             if (tab <= 0) continue;
             string userId = line.Substring(0, tab);
-            if (int.TryParse(line.Substring(tab + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int step) && step > 0)
-                _volumeSteps[userId] = step;
+            if (int.TryParse(line.Substring(tab + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int percent)
+                && percent >= 0 && percent <= 100 && percent != DefaultVolumePercent)
+                _volumes[userId] = percent;
         }
     }
 
@@ -40,10 +43,10 @@ internal sealed class MusicPreferenceStore
         lock (_gate) return !string.IsNullOrWhiteSpace(userId) && _muted.Contains(userId);
     }
 
-    /// <summary>Index into <see cref="PluginMusicPreferences.VolumeSteps"/>; 0 (full volume) when never chosen.</summary>
-    public int VolumeStep(string userId)
+    /// <summary>0-100; <see cref="DefaultVolumePercent"/> when never chosen.</summary>
+    public int VolumePercent(string userId)
     {
-        lock (_gate) return !string.IsNullOrWhiteSpace(userId) && _volumeSteps.TryGetValue(userId, out int step) ? step : 0;
+        lock (_gate) return !string.IsNullOrWhiteSpace(userId) && _volumes.TryGetValue(userId, out int percent) ? percent : DefaultVolumePercent;
     }
 
     public void SetMuted(string userId, bool muted)
@@ -60,23 +63,24 @@ internal sealed class MusicPreferenceStore
         }
     }
 
-    /// <summary>Step 0 is the default and is stored as an absent record.</summary>
-    public void SetVolumeStep(string userId, int step)
+    /// <summary>The default percent is stored as an absent record.</summary>
+    public void SetVolumePercent(string userId, int percent)
     {
         ValidateUserId(userId);
-        if (step < 0) throw new ArgumentOutOfRangeException(nameof(step));
+        if (percent < 0 || percent > 100) throw new ArgumentOutOfRangeException(nameof(percent));
         lock (_gate)
         {
-            _volumeSteps.TryGetValue(userId, out int current);
-            if (current == step) return;
-            var next = new Dictionary<string, int>(_volumeSteps, StringComparer.Ordinal);
-            if (step == 0) next.Remove(userId); else next[userId] = step;
+            if (VolumePercentUnlocked(userId) == percent) return;
+            var next = new Dictionary<string, int>(_volumes, StringComparer.Ordinal);
+            if (percent == DefaultVolumePercent) next.Remove(userId); else next[userId] = percent;
             WriteAtomic(_volumePath, next.OrderBy(x => x.Key, StringComparer.Ordinal)
                 .Select(x => x.Key + "\t" + x.Value.ToString(CultureInfo.InvariantCulture)));
-            _volumeSteps.Clear();
-            foreach (var pair in next) _volumeSteps[pair.Key] = pair.Value;
+            _volumes.Clear();
+            foreach (var pair in next) _volumes[pair.Key] = pair.Value;
         }
     }
+
+    private int VolumePercentUnlocked(string userId) => _volumes.TryGetValue(userId, out int percent) ? percent : DefaultVolumePercent;
 
     private static void ValidateUserId(string userId)
     {
