@@ -36,12 +36,16 @@ namespace ServerKeybinds
     {
         public bool Active;
         public Action<Player, bool> Receive = null!;
+        public Action<Player, int> ReceiveVolume = null!;
         public Func<Player, bool> Default = null!;
+        public string[] VolumeOptions = null!;
         public KeybindBlock InCategory(SettingsCategory category) => this;
         public KeybindBlock Header(string label) => this;
         public KeybindBlock AddTwoButtons(int id, string label, string a, string b,
             Func<Player, bool> initial, bool fallback, string hint, Action<Player, bool> changed)
         { Default = initial; Receive = changed; return this; }
+        public KeybindBlock AddDropdown(int id, string label, string[] options, int defaultIndex, string hint, Action<Player, int> changed)
+        { VolumeOptions = options; ReceiveVolume = changed; return this; }
         public void Enable()
         {
             if (KeybindRegistry.Active != null) throw new InvalidOperationException("Duplicate setting");

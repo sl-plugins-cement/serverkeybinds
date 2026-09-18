@@ -4,7 +4,7 @@
 
 `ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library installed under LabAPI's `dependencies/global` directory, not a standalone gameplay plugin.
 
-API 5 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
+API 6 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. API 6 adds a shared per-player music volume step beside the API 5 mute toggle. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
 
 Typical usage:
 
@@ -22,7 +22,7 @@ block.Enable();
 
 Call `Disable()` during plugin shutdown. Add a fixed base to `SssIdBlocks` before introducing a new consumer.
 
-### Shared plugin music (API 5)
+### Shared plugin music (API 5, volume step in API 6)
 
 Players use **Announcements → Plugin music → On / Muted** to control music from
 ReinforcementsSystem, ScriptedWarhead (Omega), and Global Music Player together. The setting
@@ -43,6 +43,29 @@ IDisposable musicPreferences = PluginMusicPreferences.Acquire();
 speaker.ValidPlayers = player => ExistingAudience(player) && PluginMusicPreferences.CanReceiveMusic(player);
 // On shutdown: stop/destroy your speakers, then musicPreferences.Dispose().
 ```
+
+**Volume (API 6).** The same block also offers **Plugin music volume → 100% / 75% / 50% / 25%** at ID
+**24002** (`PluginMusicPreferences.VolumeSettingId`). A speaker's volume is one network value every listener
+shares, so a consumer delivers per-player volume by running one speaker per entry of
+`PluginMusicPreferences.VolumeSteps` and routing each listener to exactly one of them:
+
+```csharp
+for (int step = 0; step < PluginMusicPreferences.VolumeSteps.Count; step++)
+{
+    int captured = step;
+    speaker[step].ControllerId = (byte)(baseId + step);
+    speaker[step].Volume = master * PluginMusicPreferences.VolumeSteps[step];
+    speaker[step].ValidPlayers = p => Audience(p) && PluginMusicPreferences.CanReceiveMusic(p)
+                                       && PluginMusicPreferences.VolumeStepOf(p) == captured;
+}
+// Feed every speaker the same samples in the same frame; the transmitters stay in lockstep.
+```
+
+`VolumeStepOf(player)` / `VolumeOf(player)` are safe on audio threads; `SetVolumeStep(player, step)` persists a
+console choice and `VolumeStepChanged` fires on the game thread. Steps are mirrored by UserId to
+`LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt` (`userId<TAB>step`, step 0 is absent).
+A consumer that keeps a single speaker ignores the step and plays at full volume; today only Global Music
+Player is tiered.
 
 Use this predicate for music only. Future plugins must explicitly integrate it; this is not an
 interceptor for unrelated audio. Labels follow `KeybindRegistry.Language` (empty/cn → Chinese, en → English).
@@ -152,11 +175,11 @@ the tab can legitimately remain at version 0.
 
 `ServerKeybinds.dll` 是元仓库插件使用的 SCP:SL“服务器专属设置”进程级唯一管理器。它是安装在 LabAPI `dependencies/global` 目录中的共享依赖库，不是独立游戏插件。
 
-API 4 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
+API 6 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性，并在 API 5 的静音开关旁新增每人独立的音乐音量档位；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
 
 插件停用时必须调用 `Disable()`。新增使用者前，应先在 `SssIdBlocks` 中分配固定基址。
 
-### 共享插件音乐（API 5）
+### 共享插件音乐（API 5，音量档位见 API 6）
 
 玩家在 **公告 → 插件音乐 → 开启 / 静音** 中统一控制增援系统、Omega 核弹及全服音乐播放器的音乐。
 播放过程中切换立即影响后续音频包，不重启曲目，也不改变演出、字幕或核弹倒计时。
@@ -167,6 +190,14 @@ API 4 支持分组标题、按键绑定、下拉菜单、滑条、原生双按�
 停用其中一个不会影响其他使用者。请随这些插件构建一同安装 ServerKeybinds 5 依赖库。
 使用者启用时调用 `PluginMusicPreferences.Acquire()`，将 `CanReceiveMusic` 与原有听众条件取交集，
 停用时先停止并销毁音频，再释放租约。未来插件必须主动接入；不会拦截无关音频。
+
+**音量（API 6）。** 同一区块还提供 **插件音乐音量 → 100% / 75% / 50% / 25%**（ID **24002**，
+`PluginMusicPreferences.VolumeSettingId`）。扬声器音量是所有听众共享的同一个网络值，因此使用者需要按
+`PluginMusicPreferences.VolumeSteps` 的每个档位各建一个扬声器，并用 `VolumeStepOf(player) == 档位`
+把每名玩家路由到其中一个，同一帧向所有扬声器喂入相同采样即可保持同步。`VolumeStepOf` / `VolumeOf`
+可在音频线程调用；`SetVolumeStep` 保存控制台选择，`VolumeStepChanged` 在游戏线程触发。档位按 UserId
+镜像到 `LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt`（`userId<TAB>档位`，档位 0 不保存）。
+仍使用单个扬声器的使用者忽略档位、按全音量播放；目前只有 Global Music Player 采用多扬声器。
 界面语言遵循 `KeybindRegistry.Language`（空/cn 为中文，en 为英文）。
 
 保留原 GMP 默认双按钮类型及 ID **24001**；旧自定义 ID 不再使用。按 UserId 原子保存至

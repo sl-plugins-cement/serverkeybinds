@@ -55,13 +55,47 @@ try
     using (PluginMusicPreferences.Acquire())
         Check(KeybindRegistry.Active!.Default(reconnected) && !runningMusic(reconnected), "disk persistence survives full service reload");
 
+    using (PluginMusicPreferences.Acquire())
+    {
+        var volumeBlock = KeybindRegistry.Active!;
+        Check(volumeBlock.VolumeOptions.SequenceEqual(new[] { "100%", "75%", "50%", "25%" }), "volume dropdown lists every step as a percentage");
+        Check(PluginMusicPreferences.VolumeStepOf(bob) == 0 && PluginMusicPreferences.VolumeOf(bob) == 1f, "players start at full volume");
+        int notified = -1;
+        Action<Player, int> onChanged = (player, step) => { if (player == bob) notified = step; };
+        PluginMusicPreferences.VolumeStepChanged += onChanged;
+        volumeBlock.ReceiveVolume(bob, 2);
+        Check(PluginMusicPreferences.VolumeStepOf(bob) == 2 && PluginMusicPreferences.VolumeOf(bob) == 0.5f && notified == 2, "menu volume choice applies immediately and notifies consumers");
+        notified = -1;
+        volumeBlock.ReceiveVolume(bob, 2);
+        Check(notified == -1, "duplicate volume response does not re-notify");
+        Func<Player, bool> halfSpeaker = player => PluginMusicPreferences.CanReceiveMusic(player) && PluginMusicPreferences.VolumeStepOf(player) == 2;
+        Func<Player, bool> fullSpeaker = player => PluginMusicPreferences.CanReceiveMusic(player) && PluginMusicPreferences.VolumeStepOf(player) == 0;
+        Check(halfSpeaker(bob) && !fullSpeaker(bob), "tiered speaker predicates route a listener to exactly one speaker");
+        volumeBlock.ReceiveVolume(bob, 9);
+        Check(PluginMusicPreferences.VolumeStepOf(bob) == 2, "out-of-range volume responses are ignored");
+        PluginMusicPreferences.SetVolumeStep(bob, 0);
+        Check(PluginMusicPreferences.VolumeOf(bob) == 1f && notified == 0, "console reset returns to full volume");
+        PluginMusicPreferences.SetVolumeStep(bob, 3);
+        PluginMusicPreferences.VolumeStepChanged -= onChanged;
+    }
+    using (PluginMusicPreferences.Acquire())
+        Check(PluginMusicPreferences.VolumeOf(bob) == 0.25f, "volume step survives full service reload");
+
     string storePath = Path.Combine(root, "isolated", "muted.txt");
-    var store = new MusicPreferenceStore(storePath);
+    string volumePath = Path.Combine(root, "isolated", "volume.txt");
+    var store = new MusicPreferenceStore(storePath, volumePath);
     store.SetMuted("alice@steam", true);
     store.SetMuted("bob@steam", true);
     store.SetMuted("alice@steam", false);
-    var restored = new MusicPreferenceStore(storePath);
+    store.SetVolumeStep("alice@steam", 3);
+    store.SetVolumeStep("bob@steam", 1);
+    store.SetVolumeStep("bob@steam", 0);
+    var restored = new MusicPreferenceStore(storePath, volumePath);
     Check(!restored.IsMuted("alice@steam") && restored.IsMuted("bob@steam"), "atomic replacement persists mute and unmute independently");
+    Check(restored.VolumeStep("alice@steam") == 3 && restored.VolumeStep("bob@steam") == 0, "volume steps persist and a reset step is dropped from disk");
+    bool tabRejected = false;
+    try { store.SetVolumeStep("tab	user", 1); } catch (ArgumentException) { tabRejected = true; }
+    Check(tabRejected, "a tab in the identity cannot corrupt the volume record format");
     bool rejected = false;
     try { store.SetMuted("injected\nuser", true); } catch (ArgumentException) { rejected = true; }
     Check(rejected, "invalid identity cannot inject a stored record");

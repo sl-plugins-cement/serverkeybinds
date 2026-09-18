@@ -8,9 +8,9 @@
          (PublicKeyToken=null), and the CLR ignores version, culture and token when binding those. An
          old consumer therefore still loads against a new DLL - which is why consumers must probe for
          API 4 members by reflection before calling them, not trust a version number. -->
-    <AssemblyVersion>5.0.0.0</AssemblyVersion>
-    <FileVersion>5.0.0.0</FileVersion>
-    <Version>5.0.0</Version>
+    <AssemblyVersion>6.0.0.0</AssemblyVersion>
+    <FileVersion>6.0.0.0</FileVersion>
+    <Version>6.0.0</Version>
     <Nullable>enable</Nullable>
     <AssemblyName>ServerKeybinds</AssemblyName>
     <RootNamespace>ServerKeybinds</RootNamespace>

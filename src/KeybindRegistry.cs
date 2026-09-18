@@ -42,7 +42,7 @@ public static class KeybindRegistry
     /// and deployed together with this assembly, so "the loaded registry might be older" is not a state
     /// that can occur; a mismatched DLL is a deployment bug and should fail loudly, not be papered over.
     /// </summary>
-    public static int ApiVersion => 5;
+    public static int ApiVersion => 6;
 
     /// <summary>
     /// Language for the category headers this registry synthesises. An empty value or <c>cn</c> renders
