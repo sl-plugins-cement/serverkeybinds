@@ -1,5 +1,10 @@
 # ServerKeybinds
 
+[中文协作者入门](docs/入门.md) · [Cement 完整教学示例](https://github.com/sl-plugins-cement/scpsl-plugin-examples)
+
+首次参与请先阅读中文入门文档。以下保留现有双语 API 参考。
+
+
 ## English
 
 `ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library installed under LabAPI's `dependencies/global` directory, not a standalone gameplay plugin.
