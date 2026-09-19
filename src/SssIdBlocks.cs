@@ -39,7 +39,7 @@ public enum SettingsCategory
 
 public static class SssIdBlocks
 {
-    /// <summary>Cement 中文教学示例；复制示例开发产品时必须申请新的区块。</summary>
+    /// <summary>基础教学示例；复制示例开发产品时必须申请新的区块。</summary>
     public const int CementExamples = 1150000;
 
     /// <summary>Width of every plugin's reserved id block. Bases must be a multiple of this.</summary>

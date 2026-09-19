@@ -1,6 +1,6 @@
 # ServerKeybinds
 
-[中文协作者入门](docs/入门.md) · [Cement 完整教学示例](https://github.com/sl-plugins-cement/scpsl-plugin-examples/tree/onboarding-foundations-zh)
+[中文协作者入门](docs/入门.md) · [完整教学示例](https://github.com/sl-plugins-cement/scpsl-plugin-examples/tree/onboarding-foundations-zh)
 
 首次参与请先阅读中文入门文档。以下保留现有双语 API 参考。
 
