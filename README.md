@@ -2,7 +2,7 @@
 
 ## English
 
-`ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library installed under LabAPI's `dependencies/global` directory, not a standalone gameplay plugin.
+`ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library, not a standalone gameplay plugin. Install exactly one copy in a folder the host's `LabAPI/LabApi-<port>.yml` actually loads: on SR1 production that is `LabAPI/plugins/7777`, because its loader lists only the port folders and ignores `plugins/global` and `dependencies/global`. Check the host runbook before placing it; a copy in an unloaded folder is silently ignored and a stale copy in the loaded folder wins.
 
 API 5 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
 
@@ -33,7 +33,7 @@ fallback announcement remain enabled.
 
 ServerKeybinds owns this preference. GMP is only a consumer and is not required by the other plugins.
 The setting exists while at least one consumer is enabled. Disabling one consumer never removes it
-from the others. Install ServerKeybinds 5 with these consumer builds in LabAPI dependencies.
+from the others. Install ServerKeybinds 5 or newer with these consumer builds, in the folder the host's LabAPI loader reads (API 6 adds the volume slider that Global Music Player 2.1 requires).
 
 Each consumer acquires a lease on enable and disposes it **after stopping its audio** on disable:
 
@@ -150,7 +150,7 @@ the tab can legitimately remain at version 0.
 
 ## 中文
 
-`ServerKeybinds.dll` 是元仓库插件使用的 SCP:SL“服务器专属设置”进程级唯一管理器。它是安装在 LabAPI `dependencies/global` 目录中的共享依赖库，不是独立游戏插件。
+`ServerKeybinds.dll` 是元仓库插件使用的 SCP:SL“服务器专属设置”进程级唯一管理器。它是共享依赖库，不是独立游戏插件。只安装一份，且必须放在该主机 `LabAPI/LabApi-<port>.yml` 实际加载的目录中：SR1 生产服只加载端口目录，因此应放在 `LabAPI/plugins/7777`，`plugins/global` 与 `dependencies/global` 均不会被加载。放置前先查主机手册；放在未加载目录中的副本会被静默忽略，而已加载目录中的旧副本会生效。
 
 API 4 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
 
