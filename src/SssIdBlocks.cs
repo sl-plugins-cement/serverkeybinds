@@ -117,7 +117,7 @@ public static class SssIdBlocks
     /// <summary>Shared plugin music preference (24000/24001); retains the former GMP toggle ID and type.</summary>
     public const int GlobalMusic = 24000;
 
-    /// <summary>MvpSystem music toggle (currently the bare id 300; re-home here when migrated).</summary>
+    /// <summary>MvpSystem music toggle (local 1; was the bare id 300 before it registered here).</summary>
     public const int MvpSystem = 25000;
 
     /// <summary>EffectDisplay time-effect toggle (currently 2030/2031; re-home here when migrated).</summary>
@@ -133,8 +133,23 @@ public static class SssIdBlocks
     /// <summary>ProjectMER tool-gun schematic selector; visible only to tool-gun holders.</summary>
     public const int ProjectMer = 28000;
 
-    /// <summary>CustomizableUIMeow HUD toggles (already based at 530210; the block covers its full span).</summary>
+    /// <summary>AdditionalNameTags: prefix toggle, custom name text and mode.</summary>
+    public const int AdditionalNameTags = 29000;
+
+    /// <summary>PlayerBadge badge picker (local 1; was 530270 inside the CustomizableUIMeow span).</summary>
+    public const int PlayerBadge = 30000;
+
+    /// <summary>
+    /// CustomizableUIMeow HUD toggles. The plugin keeps its historical ids (530210 header, toggles above it)
+    /// as locals 210+ inside this block, so players' saved HUD choices survive the move to the registry.
+    /// </summary>
     public const int CustomizableUi = 530000;
+
+    /// <summary>
+    /// ScpTiers ability keybinds. Keeps its historical ids (9100100 header, 9100102 storm, 9100103 overclock)
+    /// as locals 100+ inside this block so saved keys survive.
+    /// </summary>
+    public const int ScpTiers = 9100000;
 
     /// <summary>Every declared category, in display order. Used to strip stale synthesised headers.</summary>
     public static readonly SettingsCategory[] AllCategories =
