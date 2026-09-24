@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SssRefreshCoordinator.cs" Link="SssRefreshCoordinator.cs" />
+    <Compile Include="../../src/SssInterestIndex.cs" Link="SssInterestIndex.cs" />
+    <Compile Include="../../src/SssViewFingerprint.cs" Link="SssViewFingerprint.cs" />
+    <Compile Include="../../src/PersonalizedDropdownLedger.cs" Link="PersonalizedDropdownLedger.cs" />
+    <Compile Include="../../src/DropdownModel.cs" Link="DropdownModel.cs" />
+  </ItemGroup>
+</Project>

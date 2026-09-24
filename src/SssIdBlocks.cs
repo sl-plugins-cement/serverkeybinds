@@ -72,8 +72,14 @@ public static class SssIdBlocks
     /// <summary>InvincibleWarMark active ability keybind.</summary>
     public const int InvincibleWarMark = 1120000;
 
-    /// <summary>AircraftCarrier surface-only grenade barrage and precision-drone controls.</summary>
-    public const int AircraftCarrier = 1130000;
+    /// <summary>SCPSLBot personalized warmup gameplay controls (deployed on the bot lane).</summary>
+    public const int ScpslBotWarmup = 1130000;
+
+    /// <summary>StatsBots display preferences and personalized title selection (deployed on the bot lane).</summary>
+    public const int StatsBots = 1131000;
+
+    /// <summary>SCPSLBot permission-gated diagnostics, navigation authoring, and force-role tools (deployed on the bot lane).</summary>
+    public const int ScpslBotTools = 1132000;
 
     /// <summary>SCP-966 and night vision equipment controls.</summary>
     public const int Scp966 = 1140000;
@@ -86,6 +92,12 @@ public static class SssIdBlocks
     /// block; this one is never deployed beside a real plugin.
     /// </summary>
     public const int CementExamples = 1160000;
+
+    /// <summary>
+    /// AircraftCarrier surface-only grenade barrage and precision-drone controls. Moved here off 1130000,
+    /// which the bot warmup block (<see cref="ScpslBotWarmup"/>) already occupied on the deployed bot lane.
+    /// </summary>
+    public const int AircraftCarrier = 1170000;
 
     /// <summary>SpatialSurveyMarkers survey-mode controls.</summary>
     public const int SpatialSurveyMarkers = 1200000;

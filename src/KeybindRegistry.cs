@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using LabApi.Features.Wrappers;
 using LabApi.Loader;
+using MEC;
 using PlayerRoles;
 using RemoteAdmin;
 using RoundRestarting;
@@ -87,6 +89,29 @@ public static class KeybindRegistry
     /// untouched default as a deliberate choice. What was sent is the only thing worth comparing to.
     /// </summary>
     private static readonly Dictionary<string, Dictionary<int, bool>> SentTwoButtonDefaults = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The personalised dropdown option lists each player was ACTUALLY sent, keyed by UserId, with one
+    /// response latch per entry per send generation. Same rationale as <see cref="SentTwoButtonDefaults"/>:
+    /// a response is only meaningful against what is on the player's screen.
+    /// </summary>
+    private static readonly Dictionary<string, PersonalizedDropdownLedger> SentPersonalizedDropdowns = new(StringComparer.Ordinal);
+    private static readonly Stopwatch RefreshClock = Stopwatch.StartNew();
+
+    /// <summary>
+    /// The debounced, coalesced, rate-limited refresh budget, keyed by UserId. Its snapshot is the Player
+    /// itself: the view is built and fingerprinted when a candidate is processed, and the actual send goes
+    /// through <see cref="Delivery"/> like every other send, which records itself here.
+    /// </summary>
+    private static readonly SssRefreshCoordinator<string, Player> RefreshCoordinator = new(
+        () => RefreshClock.Elapsed.TotalSeconds,
+        FingerprintFor,
+        SendCoordinatedRefresh,
+        StringComparer.Ordinal);
+
+    /// <summary>The process-wide interest router used to target invalidations, keyed by UserId.</summary>
+    public static SssInterestIndex<string> InterestIndex { get; } = new(StringComparer.Ordinal);
+
     private static readonly HashSet<int> WarnedForeignIds = new();
     private static readonly SettingsDeliveryCoordinator Delivery = new(
         SendPersonalizedNow,
@@ -95,6 +120,9 @@ public static class KeybindRegistry
     private static bool _commandRegistered;
     private static bool _identityLogged;
     private static bool _subscribed;
+    private static bool _refreshPumpScheduled;
+    private static int _refreshPumpGeneration;
+    private static double _refreshPumpDueSeconds;
     private static Predicate<ReferenceHub>? _previousJoinFilter;
 
     /// <summary>
@@ -206,8 +234,21 @@ public static class KeybindRegistry
     /// plugins happened to load in. One category header is emitted the first time that category appears, and
     /// a category with no included block emits nothing.
     /// </summary>
-    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include, Player? player = null)
+    /// <param name="recordSent">
+    /// True only on the build that is actually sent to <paramref name="player"/>: records the two-button
+    /// defaults and personalised dropdown option lists they receive. A diagnostic or fingerprint build
+    /// passes false so it cannot overwrite the record of what is on the player's screen.
+    /// </param>
+    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include, Player? player, bool recordSent)
     {
+        string userId = player?.UserId ?? string.Empty;
+        PersonalizedDropdownLedger? ledger = null;
+        if (recordSent && player != null && !string.IsNullOrWhiteSpace(userId))
+        {
+            ledger = LedgerFor(userId);
+            ledger.StartGeneration();
+        }
+
         SettingsCategory? current = null;
         foreach (KeybindBlock block in Blocks.Values
                      .Where(include)
@@ -223,9 +264,18 @@ public static class KeybindRegistry
 
             foreach (ServerSpecificSettingBase setting in block.BuildSettings(player))
             {
-                if (player != null && setting is SSTwoButtonsSetting twoButtons)
+                if (ledger != null)
                 {
-                    RecordSentDefault(player.UserId, twoButtons.SettingId, twoButtons.DefaultIsB);
+                    if (setting is SSTwoButtonsSetting twoButtons)
+                    {
+                        RecordSentDefault(userId, twoButtons.SettingId, twoButtons.DefaultIsB);
+                    }
+                    else if (setting is SSDropdownSetting dropdown
+                        && block.ValueSettings.TryGetValue(dropdown.SettingId - block.BaseId, out KeybindBlock.ValueSetting owner)
+                        && owner is KeybindBlock.PersonalizedDropdownSetting)
+                    {
+                        ledger.Record(dropdown.SettingId, dropdown.Options);
+                    }
                 }
 
                 yield return setting;
@@ -292,7 +342,7 @@ public static class KeybindRegistry
             }
         }
 
-        List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active).ToList();
+        List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active, player: null, recordSent: false).ToList();
 
         ServerSpecificSettingBase[] existingSettings = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
         WarnOnForeignCollisions(existingSettings, ownedIds);
@@ -356,6 +406,117 @@ public static class KeybindRegistry
     }
 
     /// <summary>
+    /// Queues a personalised re-send for one player through the process-wide refresh budget: trailing
+    /// 500 ms debounce, coalesced reasons, at least two seconds between sends, at most six sends per
+    /// rolling minute, and skipped entirely when the view is identical to the last send. The send itself
+    /// goes through the same delivery path as every other send. Use this for state-driven refreshes;
+    /// <see cref="RefreshPlayer"/> stays the immediate, acknowledged re-send for operators.
+    /// </summary>
+    public static void RequestPlayerRefresh(Player player, string reason)
+    {
+        if (player == null || player.IsDestroyed || !player.IsPlayer || !player.IsReady ||
+            string.IsNullOrWhiteSpace(player.UserId))
+        {
+            return;
+        }
+
+        EnsureTracked(player.UserId);
+        RefreshCoordinator.Request(player.UserId, player, reason);
+        ScheduleRefreshPump();
+    }
+
+    /// <summary>Registers which state domains can affect one player's view. Untracked players default to all.</summary>
+    public static void SetPlayerInterests(Player player, SssInterest interests)
+    {
+        if (player != null && !string.IsNullOrWhiteSpace(player.UserId))
+        {
+            InterestIndex.Track(player.UserId, interests);
+        }
+    }
+
+    /// <summary>
+    /// Requests a refresh for <paramref name="player"/> if they registered an interest in
+    /// <paramref name="changed"/>. Never fans out to other players. Returns whether a refresh was requested.
+    /// </summary>
+    public static bool InvalidatePlayer(Player player, SssInterest changed, string reason)
+    {
+        if (player == null || string.IsNullOrWhiteSpace(player.UserId))
+        {
+            return false;
+        }
+
+        EnsureTracked(player.UserId);
+        if (InterestIndex.ResolvePersonal(player.UserId, changed).Count == 0)
+        {
+            return false;
+        }
+
+        RequestPlayerRefresh(player, reason);
+        return true;
+    }
+
+    /// <summary>
+    /// Requests a refresh for the existing players affected by the one-to-two or two-to-one population
+    /// boundary (those present in both sets who registered <see cref="SssInterest.PopulationBoundary"/>).
+    /// A newcomer is intentionally left to its ordinary join send. Returns how many refreshes were requested.
+    /// </summary>
+    public static int InvalidatePopulationBoundary(
+        IReadOnlyCollection<Player> before,
+        IReadOnlyCollection<Player> after,
+        string reason)
+    {
+        if (before == null)
+        {
+            throw new ArgumentNullException(nameof(before));
+        }
+
+        if (after == null)
+        {
+            throw new ArgumentNullException(nameof(after));
+        }
+
+        Dictionary<string, Player> afterById = new(StringComparer.Ordinal);
+        foreach (Player player in after)
+        {
+            if (player != null && !string.IsNullOrWhiteSpace(player.UserId))
+            {
+                afterById[player.UserId] = player;
+            }
+        }
+
+        string[] beforeIds = before
+            .Where(player => player != null && !string.IsNullOrWhiteSpace(player.UserId))
+            .Select(player => player.UserId)
+            .ToArray();
+        int requested = 0;
+        foreach (string userId in InterestIndex.ResolvePopulationBoundary(beforeIds, afterById.Keys.ToArray()))
+        {
+            if (afterById.TryGetValue(userId, out Player player))
+            {
+                RequestPlayerRefresh(player, reason);
+                requested++;
+            }
+        }
+
+        return requested;
+    }
+
+    /// <summary>Process-wide refresh counters (requested, sent, coalesced, rate-limited, identical).</summary>
+    public static SssRefreshCounters RefreshCounters => RefreshCoordinator.Counters;
+
+    /// <summary>The player's monotonic last-send time, last-sent view fingerprint and budget state.</summary>
+    public static bool TryGetRefreshDiagnostics(Player player, out SssRefreshPlayerDiagnostics diagnostics)
+    {
+        if (player == null || string.IsNullOrWhiteSpace(player.UserId))
+        {
+            diagnostics = default;
+            return false;
+        }
+
+        return RefreshCoordinator.TryGetDiagnostics(player.UserId, out diagnostics);
+    }
+
+    /// <summary>
     /// The last personalized-send audit record for <paramref name="player"/>: when it happened (UTC) and
     /// how many entries it carried. False when no send has been recorded for them this round.
     /// </summary>
@@ -384,25 +545,10 @@ public static class KeybindRegistry
 
     /// <summary>
     /// Diagnostics only: the entry count <paramref name="player"/> WOULD receive from a personalized send
-    /// right now. Mirrors <see cref="SendPersonalized"/> but builds with a null player so the
-    /// <see cref="SentTwoButtonDefaults"/> record of what was ACTUALLY sent is not overwritten (the player
-    /// only affects value defaults, never the entry count).
+    /// right now. Same build as <see cref="SendPersonalizedNow"/> (per-player entries may hide themselves,
+    /// so the recipient matters) but without recording, so the record of what was ACTUALLY sent survives.
     /// </summary>
-    internal static int PersonalizedEntryCountFor(Player player)
-    {
-        HashSet<int> allOwnedIds = new(RegistryOwnedIds());
-        foreach (KeybindBlock block in Blocks.Values)
-        {
-            foreach (int id in block.OwnedIds())
-            {
-                allOwnedIds.Add(id);
-            }
-        }
-
-        return BuildOrdered(block => block.Active && block.IsVisibleTo(player)).Count()
-            + (ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
-                .Count(setting => !allOwnedIds.Contains(setting.SettingId));
-    }
+    internal static int PersonalizedEntryCountFor(Player player) => BuildCollection(player, recordSent: false).Count;
 
     private static void SendPersonalizedToAll()
     {
@@ -415,7 +561,32 @@ public static class KeybindRegistry
         }
     }
 
+    /// <summary>
+    /// The ONE send path. Every personalised send - join, rebuild, reconcile, acknowledgement retry,
+    /// operator resend and budgeted refresh - is built and put on the wire here, and recorded in the
+    /// refresh budget with the fingerprint of what was actually sent.
+    /// </summary>
     private static int SendPersonalizedNow(Player player, string reason)
+    {
+        List<ServerSpecificSettingBase> collection = BuildCollection(player, recordSent: true);
+        ServerSpecificSettingsSync.SendToPlayer(
+            player.ReferenceHub,
+            collection.ToArray(),
+            SettingsDeliveryCoordinator.WireVersion);
+
+        string userId = player.UserId;
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            EnsureTracked(userId);
+            RefreshCoordinator.RecordSent(userId, SssViewFingerprint.Compute(collection));
+        }
+
+        // LabAPI's Logger.Debug is NOT globally gated - always pass the flag or this spams every send.
+        Logger.Debug($"[ServerKeybinds] Sent {collection.Count} entries to {player.Nickname} ({player.PlayerId}) [{reason}].", Debug);
+        return collection.Count;
+    }
+
+    private static HashSet<int> AllOwnedIds()
     {
         HashSet<int> allOwnedIds = new(RegistryOwnedIds());
         foreach (KeybindBlock block in Blocks.Values)
@@ -426,20 +597,150 @@ public static class KeybindRegistry
             }
         }
 
+        return allOwnedIds;
+    }
+
+    /// <summary>The full collection <paramref name="player"/> receives: ours, ordered per recipient, then foreign entries.</summary>
+    private static List<ServerSpecificSettingBase> BuildCollection(Player player, bool recordSent)
+    {
+        HashSet<int> allOwnedIds = AllOwnedIds();
+
         // Ordered per RECIPIENT, not once globally: a category whose only block is hidden from this player
         // must not leave a dangling header behind for them. Ours lead here too, matching Rebuild.
         List<ServerSpecificSettingBase> collection =
-            BuildOrdered(block => block.Active && block.IsVisibleTo(player), player).ToList();
+            BuildOrdered(block => block.Active && block.IsVisibleTo(player), player, recordSent).ToList();
         collection.AddRange((ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
             .Where(setting => !allOwnedIds.Contains(setting.SettingId)));
+        return collection;
+    }
 
-        ServerSpecificSettingsSync.SendToPlayer(
-            player.ReferenceHub,
-            collection.ToArray(),
-            SettingsDeliveryCoordinator.WireVersion);
-        // LabAPI's Logger.Debug is NOT globally gated - always pass the flag or this spams every send.
-        Logger.Debug($"[ServerKeybinds] Sent {collection.Count} entries to {player.Nickname} ({player.PlayerId}) [{reason}].", Debug);
-        return collection.Count;
+    /// <summary>The refresh coordinator's fingerprint of the view <paramref name="player"/> would receive now.</summary>
+    private static string FingerprintFor(Player player)
+    {
+        if (player == null || player.IsDestroyed || !player.IsPlayer || !player.IsReady)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return SssViewFingerprint.Compute(BuildCollection(player, recordSent: false));
+        }
+        catch (Exception exception)
+        {
+            // Never mistaken for the last sent fingerprint, which is always a real hash, so a failed build
+            // falls through to a send attempt (whose own failure is logged by the delivery coordinator).
+            Logger.Debug($"[ServerKeybinds] Refresh fingerprint for {player.Nickname} ({player.PlayerId}) failed: {exception.GetBaseException().Message}", Debug);
+            return string.Empty;
+        }
+    }
+
+    private static bool SendCoordinatedRefresh(string userId, Player player, IReadOnlyCollection<string> reasons)
+    {
+        if (player == null || !string.Equals(player.UserId, userId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // The delivery coordinator refuses players who cannot be sent to and audits the send like any
+        // other; SendPersonalizedNow records it in the refresh budget with the fingerprint that went out.
+        return Delivery.Send(player, "refresh:" + string.Join("+", reasons), requireAcknowledgement: false);
+    }
+
+    /// <summary>
+    /// Wakes the refresh coordinator when its earliest candidate is due. One delayed call at a time; a
+    /// request that moves the earliest due time forward re-arms it, and the generation guard discards a
+    /// stale wake-up after <see cref="Unsubscribe"/>.
+    /// </summary>
+    private static void ScheduleRefreshPump()
+    {
+        double? delay = RefreshCoordinator.SecondsUntilNextProcess();
+        if (!delay.HasValue)
+        {
+            return;
+        }
+
+        double dueSeconds = RefreshClock.Elapsed.TotalSeconds + delay.Value;
+        if (_refreshPumpScheduled && dueSeconds >= _refreshPumpDueSeconds - 0.001)
+        {
+            return;
+        }
+
+        _refreshPumpScheduled = true;
+        _refreshPumpDueSeconds = dueSeconds;
+        int generation = ++_refreshPumpGeneration;
+        Timing.CallDelayed((float)Math.Max(0.01, delay.Value), () =>
+        {
+            if (generation != _refreshPumpGeneration)
+            {
+                return;
+            }
+
+            _refreshPumpScheduled = false;
+            if (!_subscribed)
+            {
+                return;
+            }
+
+            RefreshCoordinator.ProcessDue();
+            ScheduleRefreshPump();
+        });
+    }
+
+    private static void EnsureTracked(string userId)
+    {
+        if (!InterestIndex.IsTracked(userId))
+        {
+            InterestIndex.Track(userId);
+        }
+    }
+
+    private static PersonalizedDropdownLedger LedgerFor(string userId)
+    {
+        if (!SentPersonalizedDropdowns.TryGetValue(userId, out PersonalizedDropdownLedger ledger))
+        {
+            ledger = new PersonalizedDropdownLedger();
+            SentPersonalizedDropdowns[userId] = ledger;
+        }
+
+        return ledger;
+    }
+
+    /// <summary>
+    /// Interprets a personalised dropdown response against the option list this player was sent: the first
+    /// value per send generation is an acquisition, a later different value a change, a repeat a duplicate,
+    /// and anything outside the sent list (or with no sent list at all) is stale.
+    /// </summary>
+    internal static PersonalizedDropdownResponseOutcome TakePersonalizedDropdownResponse(
+        Player player,
+        int settingId,
+        int rawIndex,
+        out DropdownSelection selection,
+        out PersonalizedDropdownResponseKind kind)
+    {
+        selection = default;
+        kind = PersonalizedDropdownResponseKind.Duplicate;
+        string userId = player?.UserId ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(userId) ||
+            !SentPersonalizedDropdowns.TryGetValue(userId, out PersonalizedDropdownLedger ledger))
+        {
+            return PersonalizedDropdownResponseOutcome.Stale;
+        }
+
+        return ledger.Observe(settingId, rawIndex, out selection, out kind);
+    }
+
+    /// <summary>
+    /// The client's view of a personalised dropdown does not match what this registry sent (a foreign
+    /// send replaced it, the model moved on, or the packet was forged). Drop the response and re-send the
+    /// current view through the refresh budget, which bounds how often a hostile client can trigger this.
+    /// </summary>
+    internal static void RejectStaleDropdownResponse(Player player, int settingId, string why)
+    {
+        Logger.Debug(
+            $"[ServerKeybinds] Trace: stale dropdown response for id {settingId} from player {player.PlayerId} rejected ({why}); refresh requested.",
+            PressTrace);
+        RequestPlayerRefresh(player, "stale-dropdown-response");
     }
 
     private static void WarnOnForeignCollisions(ServerSpecificSettingBase[] existingSettings, HashSet<int> ownedIds)
@@ -520,6 +821,11 @@ public static class KeybindRegistry
         Delivery.Stop();
         Pressed.Clear();
         SentTwoButtonDefaults.Clear();
+        SentPersonalizedDropdowns.Clear();
+        RefreshCoordinator.Clear();
+        InterestIndex.Clear();
+        _refreshPumpScheduled = false;
+        _refreshPumpGeneration++;
     }
 
     private static void OnRoleChanged(ReferenceHub userHub, PlayerRoleBase prevRole, PlayerRoleBase newRole)
@@ -535,6 +841,11 @@ public static class KeybindRegistry
     {
         Pressed.Clear();
         Delivery.ResetRound();
+        // Every client reconnects and gets a fresh join send, so per-player records start over too.
+        SentTwoButtonDefaults.Clear();
+        SentPersonalizedDropdowns.Clear();
+        RefreshCoordinator.Clear();
+        InterestIndex.Clear();
     }
 
     private static void OnPlayerRemoved(ReferenceHub hub)
@@ -551,6 +862,9 @@ public static class KeybindRegistry
         {
             Pressed.Remove(userId);
             SentTwoButtonDefaults.Remove(userId);
+            SentPersonalizedDropdowns.Remove(userId);
+            RefreshCoordinator.Remove(userId);
+            InterestIndex.Untrack(userId);
         }
     }
 

@@ -70,10 +70,18 @@ public sealed class KeybindsCommand : ICommand
         int userVersion = ServerSpecificSettingsSync.GetUserVersion(hub);
         bool tabOpen = ServerSpecificSettingsSync.IsTabOpenForUser(hub);
         int wouldReceive = KeybindRegistry.PersonalizedEntryCountFor(player);
+        string refresh = KeybindRegistry.TryGetRefreshDiagnostics(player, out SssRefreshPlayerDiagnostics refreshAudit)
+            ? $"refresh budget: fingerprint {Short(refreshAudit.Fingerprint)}, rolling sends " +
+              $"{refreshAudit.SendsInRollingMinute}/{SssRefreshCoordinator<string, Player>.MaximumSendsPerRollingMinute}, " +
+              $"pending {refreshAudit.Pending}"
+            : "no refresh-budget state";
+        SssRefreshCounters counters = KeybindRegistry.RefreshCounters;
 
         response = $"{player.Nickname} ({player.PlayerId}): would receive {wouldReceive} entries now; {audit}; " +
             $"{acknowledgement}; pressed latches: [{pressed}]; client accepted version {userVersion}; " +
-            $"settings tab open: {tabOpen}.";
+            $"settings tab open: {tabOpen}; {refresh}; process refresh counters " +
+            $"requested={counters.Requested}, sent={counters.Sent}, coalesced={counters.Coalesced}, " +
+            $"rate-limited={counters.RateLimited}, identical={counters.IdenticalSnapshots}.";
         return true;
     }
 
@@ -143,4 +151,8 @@ public sealed class KeybindsCommand : ICommand
 
         return Player.Get(value) ?? Player.GetByNickname(value, requireFullMatch: false);
     }
+
+    private static string Short(string value) => string.IsNullOrEmpty(value)
+        ? "none"
+        : value.Substring(0, Math.Min(value.Length, 12));
 }
