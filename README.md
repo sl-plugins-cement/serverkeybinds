@@ -1,46 +1,254 @@
 # ServerKeybinds
 
-[中文协作者入门](docs/入门.md) · [完整教学示例](https://github.com/sl-plugins-cement/scpsl-plugin-examples/tree/onboarding-foundations-zh)
+`ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings (SSS) for
+metarepo plugins. It is a shared library, not a LabAPI plugin: it owns the single additive merge
+into `ServerSpecificSettingsSync.DefinedSettings`, the personalised join send, the menu order,
+per-player visibility, key press/release edges, reliable delivery and id-collision detection.
+A consumer plugin must not create a parallel merge path or call `SendToPlayer` itself.
 
-首次参与请先阅读中文入门文档。以下保留现有双语 API 参考。
+`CustomItems.dll` hard-depends on ServerKeybinds; any custom-item plugin that needs settings or
+keybinds uses this registry.
 
+## Contract
 
-## English
+- The public surface is **additive-only**. Members are never removed or re-signatured, so a
+  consumer built against any earlier build runs against the current one.
+- `KeybindRegistry.ApiVersion` is a startup-log diagnostic only. Nothing branches on it;
+  consumers must not probe it and must not document "requires API N".
+- Every server runs the newest build. The assembly is not strong-named, so the CLR binds by simple
+  name and any build satisfies any consumer. `<Version>` in the csproj is SemVer for humans: the
+  minor is bumped for additions, the major is reserved for a break the contract forbids.
+- New native entry types are covered without a library change through `AddNative` (below).
+- Consumers build the library from source through a `ProjectReference`, using exactly this
+  convention so a checkout beside the consumer or three levels up is found automatically and any
+  other layout is passed explicitly:
 
-`ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings used by metarepo plugins. It is a shared dependency library, not a standalone gameplay plugin. Install exactly one copy in a folder the host's `LabAPI/LabApi-<port>.yml` actually loads: on SR1 production that is `LabAPI/plugins/7777`, because its loader lists only the port folders and ignores `plugins/global` and `dependencies/global`. Check the host runbook before placing it; a copy in an unloaded folder is silently ignored and a stale copy in the loaded folder wins.
+```xml
+  <PropertyGroup>
+    <ServerKeybindsProject Condition="'$(ServerKeybindsProject)' == '' And Exists('$(MSBuildThisFileDirectory)..\ServerKeybinds\ServerKeybinds.csproj')">$(MSBuildThisFileDirectory)..\ServerKeybinds\ServerKeybinds.csproj</ServerKeybindsProject>
+    <ServerKeybindsProject Condition="'$(ServerKeybindsProject)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\ServerKeybinds\ServerKeybinds.csproj')">$(MSBuildThisFileDirectory)..\..\..\ServerKeybinds\ServerKeybinds.csproj</ServerKeybindsProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(ServerKeybindsProject)" Private="false" />
+  </ItemGroup>
+  <Target Name="RequireServerKeybindsProject" BeforeTargets="BeforeBuild" Condition="!Exists('$(ServerKeybindsProject)')">
+    <Error Text="ServerKeybinds.csproj not found. Pass -p:ServerKeybindsProject=&lt;path&gt;." />
+  </Target>
+```
 
-API 6 supports group headers, keybinds, dropdowns, sliders, native two-button toggles, and per-player block visibility through one claimed 1000-ID block per consumer, and it owns the **order** of the menu. API 6 adds a shared per-player music volume slider beside the API 5 mute toggle. The registry owns the single additive merge into `ServerSpecificSettingsSync.DefinedSettings`, personalized joining-player sends, setting-response visibility gates, rising/falling key edges, and collision detection. Consumer plugins must not create a parallel global-settings merge path.
+`Private="false"` keeps the consumer's output free of its own `ServerKeybinds.dll` copy. A consumer
+build with `-p:DeployToLocalServer=true` also refreshes every deployed `ServerKeybinds.dll` copy
+under the local LabAPI install, because the `ProjectReference` builds this project with the same
+global property.
 
-Typical usage:
+Standalone build: `dotnet build ServerKeybinds.csproj -c Release -p:SCP_SL_MANAGED=<path to SCPSL_Data\Managed>`
+produces `bin/Release/net48/ServerKeybinds.dll`.
+
+## Installation
+
+Install **exactly one copy per server**, in the folder that port's `LabAPI/LabApi-<port>.yml`
+loader reads. On SR1 production that is `LabAPI/plugins/7777`: its loader lists only the port
+folders, so `plugins/global` and `dependencies/global` are never read. Check the host runbook
+before placing the file. A copy in an unread folder is silently ignored, and a stale copy in the
+read folder wins over a fresh copy anywhere else.
+
+The first `Enable()` logs which build is active:
+
+```
+[ServerKeybinds] ServerKeybinds <version> (API 6) loaded from <path> sha256 <hash>
+```
+
+If a second ServerKeybinds assembly is loaded in the same process, the registry logs an **error**
+naming that copy's path, version and hash beside the line above. Two copies mean two registries
+and two join-send owners; the stale or forked copy must be removed. Each enabled block also logs
+`'<owner>' enabled block <base> under <category> [<entries>]`, and the first Enable logs the
+registration of the `keybinds` RA command.
+
+## Id allocation
+
+Every consumer owns one fixed, 1000-wide block: id = `base + local`, where local 0 is the block
+header and 1..999 are entries. `SssIdBlocks` is the reservation table; the runtime is the
+enforcement: `ClaimBlock` rejects a base that is not 1000-aligned or equals `RegistryHeaders`, and
+`Enable()` throws when two blocks share a base, whatever constants they used. A plugin may ship
+with a new aligned base and add the table row in the same change; adding a row is bookkeeping,
+not a contract change. A foreign (non-registry) setting whose id falls inside a claimed block is
+warned about once per id.
+
+| Base | Constant | Owner |
+| --- | --- | --- |
+| 1060000 | `Scp106` | scp-106 abilities |
+| 1090000 | `Reinforcements` | reinforcements-system SRA deploy |
+| 1091000 | `ReinforcementsMedic` | reinforcements-system Medic |
+| 1092000 | `SerpentsHand` | reinforcements-system Serpent's Hand |
+| 1100000 | `GocNuke` | goc-nuke (reserved, unused) |
+| 1110000 | `SpinBot` | SpinBot observer controls |
+| 1120000 | `InvincibleWarMark` | InvincibleWarMark ability |
+| 1130000 | `AircraftCarrier` | AircraftCarrier barrage and drone |
+| 1140000 | `Scp966` | SCP-966 and night vision |
+| 1150000 | `Scp5kGanzir` | Ganzir aircraft, jetpack and naval insertion |
+| 1160000 | `CementExamples` | scpsl-plugin-examples teaching code only; never deployed beside a product |
+| 1200000 | `SpatialSurveyMarkers` | SpatialSurveyMarkers survey mode |
+| 23000 | `RegistryHeaders` | the registry's own category headers; not claimable |
+| 24000 | `GlobalMusic` | shared plugin music (24001 mute, 24002 volume) |
+| 25000 | `MvpSystem` | reserved; the plugin still uses bare id 300 |
+| 26000 | `EffectDisplay` | reserved; the plugin still uses 2030/2031 |
+| 27000 | `NewPlayerGuide` | single opt-out toggle defined by SB_WelcomeMessage, read by reinforcements-system |
+| 28000 | `ProjectMer` | tool-gun schematic selector |
+| 530000 | `CustomizableUi` | CustomizableUIMeow HUD toggles (already at 530210) |
+
+## Usage
 
 ```csharp
 KeybindBlock block = KeybindRegistry.ClaimBlock(SssIdBlocks.MyPlugin, "My Plugin")
     .InCategory(SettingsCategory.Gameplay)
-    .Header("My Plugin")
+    .Header("我的插件")
     .VisibleTo(HasAccess)
-    .Add(1, "Toggle", KeyCode.V, "Toggle the feature.", OnToggle)
-    .AddDropdown(2, "Mode", new[] { "A", "B" }, 0, "Select a mode.", OnMode)
-    .AddSlider(3, "Speed", 0f, 100f, 50f, true, "0", "{0}", "Set speed.", OnSpeed)
-    .AddTwoButtons(4, "Show tips", "On", "Off", defaultIsB: false, "Turn the tips off.", OnTips);
-block.Enable();
+    .AddTextArea(9, "建议按键需要玩家自行采纳。")
+    .Add(1, "切换", KeyCode.V, "切换功能。", OnToggle)
+    .AddDropdown(2, "模式", new[] { "A", "B" }, 0, "选择模式。", OnMode)
+    .AddSlider(3, "速度", 0f, 100f, 50f, true, "0", "{0}", "设置速度。", OnSpeed)
+    .AddTwoButtons(4, "提示", "开启", "关闭", defaultIsB: false, "关闭提示。", OnTips);
+block.Enable();   // in Plugin.Enable
+// block.Disable(); in Plugin.Disable
 ```
 
-Call `Disable()` during plugin shutdown. Add a fixed base to `SssIdBlocks` before introducing a new consumer.
+Local ids must be unique within the block and 0 is reserved for `Header(name)`; violations throw
+at registration. Entries added after `Enable()` re-merge immediately. `block.SettingId(local)`
+returns the absolute id, for example to render key glyphs elsewhere. A block emits its headers,
+then text areas, then keybinds, then value settings. Every label, hint and caption is authored and
+localised by the consumer.
 
-### Shared plugin music (API 5, volume step in API 6)
+## Entry types
 
-Players use **Announcements → Plugin music → On / Muted** to control music from
-ReinforcementsSystem, ScriptedWarhead (Omega), and Global Music Player together. The setting
-changes delivery during playback, without restarting tracks or changing cinematic/countdown timing.
-Reinforcement spatial sound effects and native game audio remain audible. Omega's custom MP3 is
-one mixed track: muting it also mutes speech embedded in that file; its separate subtitles and native
-fallback announcement remain enabled.
+- **`Header(name)` / `Header(local, name)`** — a group header. It renders as a reduced-padding
+  sub-header beneath the category header the registry synthesises.
+- **`AddTextArea(local, content, foldout, collapsedText)`** — read-only text directly under the
+  header, above the keybinds. `SSTextArea` has `UserResponseMode.None`, so it costs no client
+  response and cannot be forged back at the server.
+- **`Add(local, label, defaultKey, hint, onPressed, onReleased?, preventInteractionOnGui,
+  allowSpectatorTrigger)`** — a keybind. `onPressed` fires on the rising edge, `onReleased` on
+  the falling edge for hold-to-act. The default key is only a **suggestion**: the native parameter
+  is `SuggestedKey` and `SerializeEntry` sends nothing else; `AssignedKeyCode` is client-owned and
+  the player must click the client's apply-suggestion control. Say so in an `AddTextArea` next to
+  the keybinds. Presses are latched per UserId, so a repeated press without a release is ignored;
+  role change, registry rebuild and round restart release latches and dispatch the release edge
+  first, so a hold-to-act consumer is never left held.
+- **`AddDropdown(local, label, options, defaultIndex, hint, onChanged, entryType)`** — the
+  callback receives the validated, clamped index.
+- **`AddTwoButtons(local, label, optionA, optionB, defaultIsB, hint, onChanged)`** — the native
+  on/off control; the callback receives `true` when the player picks option B. The overload taking
+  `Func<Player, bool> defaultIsBFor, bool fallbackIsB` decides the starting position per player at
+  every personalised send (the fallback shapes only the shared array nobody receives; a throwing
+  resolver falls back too). The client reports its value on **acquisition** as well as on change,
+  so a callback is not proof the player touched anything: compare against
+  `KeybindRegistry.DefaultTwoButtonsFor(player, settingId)`, which returns the default that player
+  was actually sent. **PlayerPrefs caveat:** the client stores values under
+  `SrvSp_<server>_<typeCode>_<settingId>` (`ServerSpecificSettingBase.GeneratePrefsKey`), and the
+  type code is part of the key, so converting an existing dropdown to a two-button toggle silently
+  resets every player's saved choice. Do that deliberately.
+- **`AddSlider(local, label, min, max, default, integer, valueFormat, displayFormat, hint,
+  onChanged)`** — the callback receives the value clamped to the range.
+- **`AddButton(local, label, buttonText, hint, onPressed, holdTimeSeconds?)`** — fires once per
+  click, or once per completed hold when a hold time is given. A button has no stored value, so
+  nothing fires on acquisition.
+- **`AddPlaintext(local, label, hint, onChanged, placeholder, characterLimit, contentType)`** — a
+  text field. Like every value setting it reports on acquisition too, so the first callback
+  carries the player's saved text (or an empty string), not an edit. Text is cut to the limit.
+- **`AddNative(local, label, factory, onResponse?)`** — the escape hatch for any
+  `ServerSpecificSettingBase` the typed helpers do not cover. The factory receives the absolute
+  setting id and the recipient of the personalised send (null for the shared array), is called once
+  per send, and **must** construct the entry with that id; a different id throws. `onResponse`
+  receives the raw deserialised client response for that id. The registry applies its visibility
+  gate and nothing else, so a keybind registered this way sees both edges and gets no press latch.
 
-ServerKeybinds owns this preference. GMP is only a consumer and is not required by the other plugins.
-The setting exists while at least one consumer is enabled. Disabling one consumer never removes it
-from the others. Install ServerKeybinds 5 or newer with these consumer builds, in the folder the host's LabAPI loader reads (API 6 adds the volume slider that Global Music Player 2.1 requires).
+## Categories and order
 
-Each consumer acquires a lease on enable and disposes it **after stopping its audio** on disable:
+Blocks are sorted by `(category, Order, base id)`, so the menu is identical on every server
+regardless of plugin load order. The registry emits **one** `SSGroupHeader` per category that has a
+visible block, at the stable id `SssIdBlocks.RegistryHeaders + (int)category`; a category with no
+visible block emits no header for that player. `InCategory` rejects a value that is not in
+`SssIdBlocks.AllCategories`.
+
+| Order | `SettingsCategory` | For |
+| --- | --- | --- |
+| 0 | `Gameplay` | ability keybinds and anything that changes what the player can do |
+| 10 | `Display` | HUD, nametag and other presentation toggles |
+| 20 | `Announcements` | opt-in/opt-out switches for notices, music and guidance |
+| 30 | `Tools` | staff/observer/authoring controls, usually with `VisibleTo` |
+| 100 | `Other` | the fallback for a block that never called `InCategory` |
+
+`Order(int)` sorts within a category, lower first, default 0. Use a negative value to pin the
+settings players reach for most to the top; reinforcements-system pins its ability keybinds at
+`-1000`. `InCategory` and `Order` are presentational and change no setting id, so re-categorising
+never costs a player a saved value.
+
+Registry entries are emitted **before** foreign ones. Plugins that merge into `DefinedSettings`
+themselves keep their own relative order and are otherwise untouched.
+
+Category header labels follow `KeybindRegistry.Language`: empty or `cn` renders Chinese, `en`
+renders English. It is one global value (`DefinedSettings` is one array), set by a consumer from
+its own config; last writer wins, so a server should set it from one plugin only.
+
+## Visibility
+
+`VisibleTo(predicate)` restricts the whole block. A hidden player receives none of its entries, and
+any response the client sends for those ids is swallowed server-side. Visibility is checked before
+a key press can enter the latch; a press that was accepted still receives its release edge if a
+role change hides the block before the key comes up. Visibility is presentation, not
+authorisation: callbacks must still check the item, role, cooldown or permission they act on.
+
+## Delivery and reconcile
+
+The native settings pack is a replace, not an add, so the registry suppresses the native join send
+(`SendOnJoinFilter`) and sends each player a personalised collection with wire version 4:
+
+- **Join:** 0.75 s after the client is ready; readiness is retried up to three times at 1.5 s.
+- **Acknowledgement:** a native status report for version 4, or any registry-owned setting
+  response, acknowledges a send; an unacknowledged join or refresh send is repeated up to three
+  times. The native status version is the version the player accepted in the menu, not a transport
+  receipt, so a player who never opened the tab can legitimately stay at version 0.
+- **Reconcile:** every 30 s, each ready player who has had no registry send in the last 30 s gets a
+  paced repair send. It is skipped while an acknowledgement is pending, the settings tab is open,
+  or a key is latched; a latch defers at most one further interval, then is released as stale so a
+  lost key-up cannot stop reconciliation.
+- **Rebuild:** every `Enable`, `Disable` or late entry addition re-merges the shared array and
+  re-sends to everyone. `KeybindRegistry.RefreshPlayer(player)` re-sends to one player with
+  acknowledgement.
+
+Sent two-button defaults, send audits, acknowledgement state and key latches are keyed by UserId, so
+a reused session player id never inherits another player's state. Every per-player store is pruned
+when the player leaves; latches and pending acknowledgements are cleared on round restart.
+
+## Diagnostics
+
+- `KeybindRegistry.Debug` (static bool, consumer-set like `Language`; last writer wins) gates the
+  per-send audit line and the readiness/acknowledgement retry lines. Send reasons are `join`,
+  `join-ready-retry`, `join-ack-retry`, `refresh`, `rebuild` and `reconcile`.
+- `KeybindRegistry.PressTrace` gates a trace line at every routing decision: swallowed value
+  responses, unknown ids, latch outcomes and which block/binding a press was routed to.
+- `KeybindRegistry.Registered`, `TryGetSendAudit`, `PressedFor` and `DefaultTwoButtonsFor` expose
+  the same state to consumers.
+- RA command **`keybinds`** (alias `skb`, requires `ServerConsoleCommands`), self-registered by
+  the registry because LabAPI does not scan libraries for commands:
+  - `keybinds status <id|name>` — entries the player would receive now, the last send (UTC time,
+    count, reason), pending acknowledgement attempt, pressed latches, the client's accepted
+    version and whether the settings tab is open.
+  - `keybinds resend <id|name>` — re-pushes the personalised collection to that player.
+  - `keybinds trace on|off` — toggles `PressTrace` at runtime.
+
+## Shared plugin music
+
+Players use **Announcements → Plugin music** to control music from ReinforcementsSystem,
+ScriptedWarhead (Omega) and Global Music Player together: a two-button **On / Muted** toggle at
+id **24001** (`PluginMusicPreferences.SettingId`) and a **Plugin music volume** slider (0-100 %) at
+id **24002** (`PluginMusicPreferences.VolumeSettingId`). Both change delivery during playback
+without restarting tracks or changing cinematic/countdown timing. Reinforcement spatial effects and
+native game audio are unaffected. Omega's custom MP3 is one mixed track, so muting it also mutes
+the speech embedded in that file; its subtitles and native fallback announcement remain.
+
+ServerKeybinds owns the preference; GMP is only a consumer and is not required by the others. The
+setting exists while at least one consumer holds a lease, and disabling one consumer never removes
+it from the others. Each consumer acquires on enable and disposes **after stopping its audio**:
 
 ```csharp
 IDisposable musicPreferences = PluginMusicPreferences.Acquire();
@@ -49,193 +257,56 @@ speaker.ValidPlayers = player => ExistingAudience(player) && PluginMusicPreferen
 // On shutdown: stop/destroy your speakers, then musicPreferences.Dispose().
 ```
 
-**Volume (API 6).** The same block also offers a **Plugin music volume** slider (0-100%) at ID **24002**
-(`PluginMusicPreferences.VolumeSettingId`). A speaker's network volume is one value every listener shares,
-so a consumer applies the preference server-side: scale each PCM frame by `VolumeOf(player)` before Opus
-encoding, group listeners with the same percent so each distinct value costs one encode, and send each
-group its own `AudioMessage` on the same controller id (Global Music Player's `PerListenerTransmitter`
-is the reference). `VolumePercentOf` / `VolumeOf` are safe on audio threads; `SetVolumePercent` persists a
-console choice and `VolumePercentChanged` fires on the game thread. Values are mirrored by UserId to
-`LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt` (`userId<TAB>percent`; 100 is absent).
-A consumer that keeps the stock single-stream transmitter plays at full volume for everyone; the mute
-still applies through `CanReceiveMusic`.
+**Mute.** Compose `CanReceiveMusic` with the existing audience predicate; never replace audience
+restrictions. Opt-outs are mirrored by UserId to
+`LabAPI/configs/<port>/ServerKeybinds/plugin_music_muted.txt` and read into memory before settings
+arrive; no file reads occur on the audio path. `SetMuted` persists a console choice, but a native
+client-owned toggle cannot be repositioned from the server: the menu may still show its previous
+choice, a duplicate menu response does not undo the console change, and a changed menu choice or
+the client's saved choice on reconnect wins. GMP's `gmpmute`/`gmpunmute` aliases set this same
+preference; use the menu for a lasting client preference and `gmpmute status` for the effective
+state.
 
-Use this predicate for music only. Future plugins must explicitly integrate it; this is not an
-interceptor for unrelated audio. Labels follow `KeybindRegistry.Language` (empty/cn → Chinese, en → English).
-The native two-button type and ID **24001** retain default-ID GMP client preferences. Custom GMP IDs
-are no longer used. Opt-outs are atomically mirrored by UserId to
-`LabAPI/configs/<port>/ServerKeybinds/plugin_music_muted.txt`, read into memory before settings arrive.
-No file reads occur on the audio path. SSS choices are also saved by the native client.
+**Volume.** A speaker's network volume is one value every listener shares, so a consumer applies
+the preference server-side: scale each PCM frame by `VolumeOf(player)` before Opus encoding, group
+listeners with the same percent so each distinct value costs one encode, and send each group its
+own `AudioMessage` on the same controller id (Global Music Player's `PerListenerTransmitter` is the
+reference). `VolumePercentOf` / `VolumeOf` are safe on audio threads; `SetVolumePercent` persists
+a console choice and `VolumePercentChanged` fires on the game thread. Values are mirrored by
+UserId to `LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt` (`userId<TAB>percent`;
+100 is absent). A consumer that keeps the stock single-stream transmitter plays at full volume for
+everyone; the mute still applies through `CanReceiveMusic`.
 
-GMP's `gmpmute`/`gmpunmute` aliases set this same preference. Native client-owned settings cannot be
-repositioned from a server command: the menu may still display its previous choice. Duplicate menu
-responses do not undo a console change; a changed menu choice or the saved client choice on reconnect
-wins. Use the menu for a lasting client preference, and `gmpmute status` for the effective state.
+Use this predicate for music only; it is not an interceptor for unrelated audio, and a new plugin
+must integrate it explicitly. Labels follow `KeybindRegistry.Language`.
 
-Native evidence: `../.references/LabAPI/LabApi/Features/Wrappers/AdminToys/SpeakerToy.cs` (`ValidPlayers`),
-`../.references/LabAPI/LabApi/Features/Audio/AudioTransmitter.cs` (`Transmit`, packet recipient filtering),
-and `../.references/Decompiled/DedicatedServer/Assembly-CSharp/UserSettings/ServerSpecific/SSTwoButtonsSetting.cs`
+Native evidence: `../.references/LabAPI/LabApi/Features/Wrappers/AdminToys/SpeakerToy.cs`
+(`ValidPlayers`), `../.references/LabAPI/LabApi/Features/Audio/AudioTransmitter.cs` (`Transmit`,
+packet recipient filtering) and
+`../.references/Decompiled/DedicatedServer/Assembly-CSharp/UserSettings/ServerSpecific/SSTwoButtonsSetting.cs`
 (`SendValueUpdate` and `DeserializeUpdate` restrict value updates to server-only settings).
-
-### Categories (API 3)
-
-Before API 3 the menu order was `Dictionary<int, KeybindBlock>` enumeration order — that is, plugin load
-order — so the settings list read as an unsorted pile. Blocks are now sorted by `(category, base id)`, the
-registry emits **one** `SSGroupHeader` per category, and each block's own header renders beneath it as a
-reduced-padding sub-header.
-
-| Order | `SettingsCategory` | For |
-| --- | --- | --- |
-| 0 | `Gameplay` | ability keybinds and anything that changes what the player can do |
-| 10 | `Display` | HUD, nametag and other presentation toggles |
-| 20 | `Announcements` | opt-in/opt-out switches for notices, music and guidance |
-| 30 | `Tools` | staff/observer/authoring controls, usually with a `VisibleTo` filter |
-| 100 | `Other` | the fallback for a block that never called `InCategory` |
-
-Within a category, blocks sort by `Order(int)` (lower first, default 0) and then by base id. Use a negative
-`Order` to pin the settings players reach for most to the top — reinforcements-system pins its ability
-keybinds at `-1000`, because nothing that plugin does works until those two keys are accepted.
-
-**Registry settings are emitted BEFORE foreign ones.** `DefinedSettings` is shared with plugins that merge
-into it themselves (HUD toggles, music mutes), and appending used to push every registry setting below all of
-them — so the ability keybinds sat at the very bottom of the menu no matter how the categories were ordered.
-Foreign entries keep their own relative order and are otherwise untouched.
-
-`InCategory` and `Order` are purely presentational and change **no setting id**, so re-categorising never
-costs a player their saved values. A category whose only block is hidden from a given player emits no header
-for them.
-
-`AddTextArea` adds a read-only explanation that renders directly under the block's header, above its keybinds
-and settings — a block emits headers, then text areas, then keybinds, then value settings. `SSTextArea` has
-`UserResponseMode.None`, so it costs no client response and cannot be forged back at the server.
-
-**Keybind defaults are only a suggestion.** The native parameter is `SuggestedKey`, and `SerializeEntry`
-sends only that: `AssignedKeyCode` is client-owned and the server can never set it. The client shows an
-"apply suggestion" control the player has to click, so a suggested key is a one-click default, not a binding.
-Explain that in an `AddTextArea` next to the keybinds rather than assuming players will discover it.
-
-Category headers are synthesised at `SssIdBlocks.RegistryHeaders + (int)category`, so they have stable ids
-inside the allocation scheme rather than the label hash an id-less `SSGroupHeader` would use. Their language
-comes from `KeybindRegistry.Language` (empty or `cn` for Chinese, `en` for English; Chinese is the fallback).
-Every other string in the menu is authored and localised by the consuming plugin.
-
-### `AddTwoButtons` and the PlayerPrefs caveat
-
-`AddTwoButtons` maps to the native `SSTwoButtonsSetting` and is the right control for an on/off switch; a
-two-option dropdown works but reads as a list the player has to open. The callback receives `true` when the
-player picks option **B**.
-
-The client stores each value in PlayerPrefs under `SrvSp_<server>_<typeCode>_<settingId>`
-(`ServerSpecificSettingBase.GeneratePrefsKey`), and **the type code is part of the key**. Converting an
-existing dropdown to a two-button toggle therefore silently resets it to its default for every player who had
-already chosen a value. Do that deliberately, not as a drive-by tidy-up.
-
-### Reliable delivery and diagnostics (API 4)
-
-The native settings pack is a replace operation, not an additive one. API 4 therefore sends its personalized
-pack with wire version 4, retries join readiness and acknowledgement a bounded three times, and performs a
-paced repair send after 30 seconds without a registry send. Repair defers while the player's settings tab is
-open or a key is latched. A latch can defer one additional 30-second repair interval; after that it is
-released as stale before repair so a lost key-up cannot disable reconciliation indefinitely. A native status report for
-version 4 or any registry-owned setting response acknowledges a pending delivery. The native status version
-is the version the player has accepted in the menu, not a transport receipt; a player who has never opened
-the tab can legitimately remain at version 0.
-
-- `SentTwoButtonDefaults`, send audits, acknowledgement state, and key latches are keyed by UserId. This
-  prevents a reused session player id from inheriting another player's defaults or diagnostics.
-- Visibility is checked before a key press can enter the latch. Role change, registry rebuild, round restart,
-  and disconnect release or clear the corresponding state.
-
-- `KeybindRegistry.Debug` (static bool, consumer-set like `Language`; last writer wins) gates per-send,
-  readiness-retry, and acknowledgement-retry diagnostics. Send reasons include `join`,
-  `join-ready-retry`, `join-ack-retry`, `refresh`, `rebuild`, and `reconcile`.
-- `KeybindRegistry.PressTrace` gates a trace line at every keybind routing decision: swallowed value
-  responses, unknown setting ids, press/release latch outcomes, and which block/binding a press was
-  routed to.
-- RA command **`keybinds`** (alias `skb`, requires `ServerConsoleCommands`), self-registered by the
-  registry because LabAPI does not scan dependency libraries for commands:
-  - `keybinds status <id|name>` — the entry count the player would receive now, the last recorded send
-    (UTC time + count + reason), pending acknowledgement attempt, pressed latches, and the client's
-    accepted settings version.
-  - `keybinds resend <id|name>` — re-pushes the personalized settings collection to that player.
-  - `keybinds trace on|off` — toggles `PressTrace` at runtime.
-- State hygiene: press latches clear on role change, rebuild, and round restart, and every per-player
-  store is pruned when the player leaves.
-
-`CustomItems.dll` hard-depends on ServerKeybinds. Any custom-item plugin requiring settings or keybinds must use this registry.
 
 ## 中文
 
-`ServerKeybinds.dll` 是元仓库插件使用的 SCP:SL“服务器专属设置”进程级唯一管理器。它是共享依赖库，不是独立游戏插件。只安装一份，且必须放在该主机 `LabAPI/LabApi-<port>.yml` 实际加载的目录中：SR1 生产服只加载端口目录，因此应放在 `LabAPI/plugins/7777`，`plugins/global` 与 `dependencies/global` 均不会被加载。放置前先查主机手册；放在未加载目录中的副本会被静默忽略，而已加载目录中的旧副本会生效。
+新协作者请先阅读 [中文协作者入门](docs/入门.md) 与
+[完整教学示例](https://github.com/sl-plugins-cement/scpsl-plugin-examples/tree/onboarding-foundations-zh)。
 
-API 6 支持分组标题、按键绑定、下拉菜单、滑条、原生双按钮开关及按玩家控制区块可见性，并在 API 5 的静音开关旁新增每人独立的音乐音量滑块；每个使用者占用一个 1000 ID 的固定区块，并且由注册表统一决定菜单的**显示顺序**。注册表统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、设置响应权限过滤、按键按下/释放边沿以及冲突检测。使用插件不得再创建并行的全局设置合并路径。
+`ServerKeybinds.dll` 是元仓库插件使用的 SCP:SL“服务器专属设置”进程级唯一管理器，是共享依赖库而非独立玩法插件。它统一负责对 `ServerSpecificSettingsSync.DefinedSettings` 的加法合并、个性化加入发送、菜单顺序、按玩家可见性、按键按下/释放边沿、可靠投递与 ID 冲突检测。使用插件不得再创建并行的合并路径或自行调用 `SendToPlayer`。`CustomItems.dll` 硬依赖本库。
 
-插件停用时必须调用 `Disable()`。新增使用者前，应先在 `SssIdBlocks` 中分配固定基址。
+**契约。** 公开接口只增不改：成员永不删除或改签名，任何早期构建的使用者都能在当前构建上运行。`KeybindRegistry.ApiVersion` 仅用于启动日志诊断，任何代码不得据此分支，也不要在文档中写“需要 API N”。所有服务器都运行最新构建；程序集未强命名，CLR 只按简单名绑定。使用者通过上文英文部分给出的 `ProjectReference` 约定从源码构建本库；带 `-p:DeployToLocalServer=true` 的使用者构建会一并刷新本地 LabAPI 安装中所有已部署的 `ServerKeybinds.dll`。
 
-### 共享插件音乐（API 5，音量档位见 API 6）
+**安装。** 每台服务器只安装一份，放在该端口 `LabAPI/LabApi-<port>.yml` 加载器实际读取的目录中；SR1 生产服只加载端口目录，因此放 `LabAPI/plugins/7777`，`plugins/global` 与 `dependencies/global` 均不会被读取。放在未读取目录中的副本会被静默忽略，已读取目录中的旧副本会生效。首次 `Enable()` 输出 `[ServerKeybinds] ServerKeybinds <version> (API 6) loaded from <path> sha256 <hash>`；若进程中还加载了第二个 ServerKeybinds 程序集，会额外输出一条错误日志并给出其路径，此时必须删除陈旧或分叉的副本。
 
-玩家在 **公告 → 插件音乐 → 开启 / 静音** 中统一控制增援系统、Omega 核弹及全服音乐播放器的音乐。
-播放过程中切换立即影响后续音频包，不重启曲目，也不改变演出、字幕或核弹倒计时。
-增援空间音效及原生游戏声音不受影响。Omega 的 MP3 是混合音轨：静音也会屏蔽文件中的语音，
-但独立字幕及原生备用广播仍保留。
+**ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–28000 与 530000 为配置类插件）。
 
-设置由 ServerKeybinds 提供；GMP 只是使用者，其他插件不依赖 GMP。至少一个使用者启用时显示一个设置；
-停用其中一个不会影响其他使用者。请随这些插件构建一同安装 ServerKeybinds 5 依赖库。
-使用者启用时调用 `PluginMusicPreferences.Acquire()`，将 `CanReceiveMusic` 与原有听众条件取交集，
-停用时先停止并销毁音频，再释放租约。未来插件必须主动接入；不会拦截无关音频。
+**条目类型。** `Header`（分组标题，作为分类标题下的子标题显示）；`AddTextArea`（只读说明，显示在标题下、按键上，客户端不回传）；`Add`（按键：上升沿/下降沿回调；默认键只是 `SuggestedKey` 建议，玩家必须自行采纳，请用说明文本告知；按 UserId 锁存，角色变化、重建与回合重启会先派发释放再清除锁存）；`AddDropdown`（回传经校验的索引）；`AddTwoButtons`（原生开关，选中 B 时回调 `true`；另有按玩家决定初始位置的重载，客户端在获取时也会回报值，请与 `DefaultTwoButtonsFor` 返回的已发送默认值比较；PlayerPrefs 键包含类型码，把下拉改为双按钮会重置玩家已保存的选择）；`AddSlider`（回传裁剪后的值）；`AddButton`（每次点击或完成长按触发一次，无存储值，获取时不触发）；`AddPlaintext`（文本框，获取时同样回报已保存文本或空串）；`AddNative`（兜底：工厂函数收到绝对 ID 与个性化发送的接收者，必须用该 ID 构造条目，回调收到原始响应，注册表只做可见性过滤，不做锁存）。
 
-**音量（API 6）。** 同一区块还提供 **插件音乐音量** 滑块（0-100%，ID **24002**，
-`PluginMusicPreferences.VolumeSettingId`）。扬声器的网络音量是所有听众共享的同一个值，因此使用者在服务端
-应用该偏好：在 Opus 编码前按 `VolumeOf(player)` 缩放每个音频帧，把音量相同的听众分为一组，每组只编码一次并
-在同一控制器 ID 上单独发送 `AudioMessage`（参考 Global Music Player 的 `PerListenerTransmitter`）。
-`VolumePercentOf` / `VolumeOf` 可在音频线程调用；`SetVolumePercent` 保存控制台选择，`VolumePercentChanged`
-在游戏线程触发。取值按 UserId 镜像到 `LabAPI/configs/<port>/ServerKeybinds/plugin_music_volume.txt`
-（`userId<TAB>百分比`，100 不保存）。仍使用原生单流发送器的使用者按全音量播放；静音仍通过
-`CanReceiveMusic` 生效。
+**分类与顺序。** 区块按（分类、`Order`、基址）排序；每个分类只生成一个 `SSGroupHeader`，ID 为 `RegistryHeaders + (int)category`，对某玩家全部不可见的分类不发送标题。分类：`Gameplay`(0)、`Display`(10)、`Announcements`(20)、`Tools`(30)、`Other`(100，未调用 `InCategory` 的默认归属)。`Order` 负值可置顶（reinforcements-system 的能力按键为 `-1000`）。分类与顺序仅影响展示，不改变任何 ID。注册表条目排在外部条目之前，外部条目保持其相对顺序。分类标题语言由 `KeybindRegistry.Language` 决定（空或 `cn` 为中文，`en` 为英文），全局唯一，后写者生效。
 
-### 分类（API 3）
+**可见性。** `VisibleTo` 限制整个区块：不可见玩家收不到条目，其回传被丢弃；按键进入锁存前先检查可见性；已接受的按下即使随后因角色变化不可见仍会收到释放。可见性只是展示，回调仍须检查物品、角色、冷却与权限。
 
-API 3 之前，菜单顺序取决于 `Dictionary<int, KeybindBlock>` 的枚举顺序（即插件加载顺序），因此设置列表杂乱无序。现在区块按 `(分类, 基址)` 排序，注册表为每个分类只生成**一个** `SSGroupHeader`，各插件自己的标题则作为缩小间距的子标题显示在其下。
+**投递与对账。** 原生设置包是整体替换，因此注册表抑制原生加入发送，改为以 wire version 4 发送个性化集合：加入后 0.75 秒发送，就绪最多重试三次；version 4 状态报告或任意注册表设置回传视为确认，未确认最多重发三次（状态版本是玩家在菜单中接受的版本，从未打开设置页的玩家保持 0 属正常）；每 30 秒对 30 秒内无发送的玩家做节流修复发送，待确认、设置页打开或按键锁存时跳过，锁存最多再延后一个周期后按陈旧释放。`Enable`/`Disable`/后续添加条目会重建并向所有人重发；`RefreshPlayer` 向单个玩家重发。所有按玩家状态以 UserId 为键，离开时清理，回合重启时清空锁存与待确认。
 
-| 顺序 | `SettingsCategory` | 用途 |
-| --- | --- | --- |
-| 0 | `Gameplay` | 能力按键，以及一切改变玩家可执行动作的设置 |
-| 10 | `Display` | HUD、名牌等展示类开关 |
-| 20 | `Announcements` | 提示、音乐、引导类的开关 |
-| 30 | `Tools` | 管理/观察/创作工具，通常配合 `VisibleTo` 使用 |
-| 100 | `Other` | 未调用 `InCategory` 的区块的默认归属 |
+**诊断。** `KeybindRegistry.Debug` 控制发送与重试日志（原因：`join`、`join-ready-retry`、`join-ack-retry`、`refresh`、`rebuild`、`reconcile`）；`PressTrace` 控制按键路由跟踪。RA 命令 **`keybinds`**（别名 `skb`，需 `ServerConsoleCommands`）：`status <ID|名称>`、`resend <ID|名称>`、`trace on|off`。
 
-同一分类内，区块先按 `Order(int)`（越小越靠前，默认 0）、再按基址排序。使用负值可将最常用的设置**固定在最顶部**——reinforcements-system 将其能力按键固定为 `-1000`，因为在这两个键被采纳之前该插件的任何功能都无法使用。
-
-**注册表的设置会排在外部设置之前。** `DefinedSettings` 与自行合并的插件（HUD 开关、音乐静音等）共用；以前采用追加方式，会把注册表的所有设置挤到它们之后——无论分类如何排序，能力按键都会落在菜单最底部。外部条目保持其原有相对顺序，不做其他改动。
-
-`InCategory` 与 `Order` 仅影响展示，**不会改变任何设置 ID**，因此重新分类不会丢失玩家已保存的值。若某分类下的区块对某玩家全部不可见，则不会向他发送该分类标题。
-
-`AddTextArea` 可添加只读说明文本，它渲染在区块标题之下、按键与设置之上（区块的发出顺序为：标题 → 说明文本 → 按键 → 取值类设置）。`SSTextArea` 的 `UserResponseMode` 为 `None`，因此不产生客户端响应，也无法被伪造回传。
-
-**按键默认值只是“建议”。** 原生参数名为 `SuggestedKey`，且 `SerializeEntry` 只会发送它：`AssignedKeyCode` 归客户端所有，服务器永远无法设置。客户端会显示一个需要玩家点击的“采纳建议”控件，所以建议按键是“一键默认”而非已绑定。请用 `AddTextArea` 在按键旁边说明这一点，不要假设玩家会自行发现。
-
-分类标题由注册表在 `SssIdBlocks.RegistryHeaders + (int)category` 处生成，以便在分配方案内拥有稳定 ID（而不是无 ID 的 `SSGroupHeader` 所用的标签哈希）。其语言由 `KeybindRegistry.Language` 决定（留空或 `cn` 为中文，`en` 为英文，默认回退中文）。菜单中其余文本均由使用插件自行本地化。
-
-### `AddTwoButtons` 与 PlayerPrefs 注意事项
-
-`AddTwoButtons` 对应原生 `SSTwoButtonsSetting`，是开/关类开关的正确控件；两选项下拉菜单虽然可用，但玩家需要展开才能选择。玩家选中选项 **B** 时回调传入 `true`。
-
-客户端将每个设置值保存在 PlayerPrefs 的 `SrvSp_<服务器>_<类型码>_<设置ID>` 下（见 `ServerSpecificSettingBase.GeneratePrefsKey`），**类型码是键的一部分**。因此将现有下拉菜单改为双按钮开关，会静默地把所有已选过值的玩家重置为默认值。请有意识地进行这类转换，不要顺手改。
-
-### 可靠发送与诊断（API 4）
-
-原生设置包是“整体替换”而不是追加操作。API 4 使用 wire version 4 发送个性化设置包；加入就绪与确认均最多重试三次，并在某玩家连续 30 秒没有注册表发送后进行节流修复发送。设置页打开或存在按键锁存时会延后修复；锁存最多再延后一个 30 秒修复周期，之后会先作为陈旧状态释放再修复，避免丢失的松键事件永久关闭对账。version 4 状态报告，或任意注册表自有设置响应，都会确认待处理发送。原生状态版本表示玩家已在菜单中接受的版本，并非网络传输回执；从未打开设置页的玩家保持 version 0 属于正常情况。
-
-- 双按钮已发送默认值、发送审计、确认状态与按键锁存均按 UserId 保存，避免复用会话 PlayerId 时继承其他玩家的状态。
-- 可见性会在按键进入锁存前检查；角色变化、注册表重建、回合重启和断线都会释放或清理对应状态。
-
-- `KeybindRegistry.Debug`（静态布尔值，与 `Language` 一样由使用插件设置，后写者生效）控制发送、就绪重试与确认重试日志。发送原因包括 `join`、`join-ready-retry`、`join-ack-retry`、`refresh`、`rebuild` 与 `reconcile`。
-- `KeybindRegistry.PressTrace` 控制按键路由每个决策点的跟踪日志：被丢弃的设置值响应、未知设置 ID、按下/释放锁存结果，以及按键被路由到哪个区块与绑定。
-- RA 命令 **`keybinds`**（别名 `skb`，需要 `ServerConsoleCommands` 权限），由注册表自行注册（LabAPI 不会扫描依赖库中的命令）：
-  - `keybinds status <ID|名称>` —— 该玩家此刻应收到的条目数量、最近一次记录的发送（UTC 时间 + 数量 + 原因）、待确认尝试次数、按下锁存列表，以及客户端已接受的设置版本。
-  - `keybinds resend <ID|名称>` —— 向该玩家重新推送个性化设置集合。
-  - `keybinds trace on|off` —— 运行时切换 `PressTrace`。
-- 状态清理：按下锁存会在角色变更、注册表重建与回合重启时清除；玩家离开时会清理其全部按玩家状态。
-
-`CustomItems.dll` 硬依赖 ServerKeybinds。任何需要设置或按键绑定的自定义物品插件都必须使用该注册表。
+**共享插件音乐。** 玩家在 **公告与提示 → 插件音乐** 中统一控制增援系统、Omega 核弹与全服音乐播放器的音乐：**开启 / 静音** 开关（ID 24001）与 **插件音乐音量** 滑块（0–100%，ID 24002）。切换即时生效，不重启曲目，不影响演出、字幕与倒计时；增援空间音效与原生音频不受影响；Omega 的 MP3 为混合音轨，静音会同时屏蔽其中语音，独立字幕与原生备用广播保留。本库拥有该偏好，GMP 只是使用者。使用者启用时 `PluginMusicPreferences.Acquire()`，将 `CanReceiveMusic` 与原有听众条件取交集，停用时先停止销毁音频再释放租约。音量需在服务端应用：Opus 编码前按 `VolumeOf(player)` 缩放音频帧，按相同百分比分组各编码一次并在同一控制器 ID 上分别发送（参考 GMP 的 `PerListenerTransmitter`）；仍用原生单流发送器的使用者全音量播放，静音仍通过 `CanReceiveMusic` 生效。`VolumePercentOf`/`VolumeOf` 可在音频线程调用；`SetMuted`/`SetVolumePercent` 保存控制台选择，`VolumePercentChanged` 在游戏线程触发。偏好按 UserId 镜像到 `LabAPI/configs/<port>/ServerKeybinds/plugin_music_muted.txt` 与 `plugin_music_volume.txt`（100 不保存），音频路径不读文件。原生客户端拥有的开关无法由服务器改变位置：菜单可能仍显示旧选择，重复回传不会撤销控制台修改，而新的菜单选择或重连时客户端保存的选择优先。GMP 的 `gmpmute`/`gmpunmute` 设置同一偏好，`gmpmute status` 查看实际状态。该谓词仅用于音乐，新插件必须主动接入。
