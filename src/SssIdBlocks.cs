@@ -68,6 +68,9 @@ public static class SssIdBlocks
     /// <summary>SCP-966 and night vision equipment controls.</summary>
     public const int Scp966 = 1140000;
 
+    /// <summary>Ganzir aircraft, jetpack and naval insertion controls.</summary>
+    public const int Scp5kGanzir = 1150000;
+
     // --- The registry's own reserved block ---
 
     /// <summary>
