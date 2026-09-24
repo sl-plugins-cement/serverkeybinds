@@ -1104,9 +1104,11 @@ public static class KeybindRegistry
             Assembly self = typeof(KeybindRegistry).Assembly;
             AssemblyName selfName = self.GetName();
             string location = LocationOf(self);
+            // LabAPI loads dependencies from bytes, so Location is usually empty and there is no file to hash;
+            // the module version id is a per-compilation GUID that still identifies the exact build.
             Logger.Info(
                 $"[ServerKeybinds] {selfName.Name} {selfName.Version} (API {ApiVersion}) loaded from {location}" +
-                $"{HashSuffix(location)}.");
+                $"{HashSuffix(location)} mvid {ModuleIdOf(self)}.");
 
             foreach (Assembly other in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -1119,13 +1121,25 @@ public static class KeybindRegistry
                 string otherLocation = LocationOf(other);
                 Logger.Error(
                     $"[ServerKeybinds] A second {selfName.Name} assembly ({other.GetName().Version}) is loaded from " +
-                    $"{otherLocation}{HashSuffix(otherLocation)}. Two copies mean two registries and two join-send " +
+                    $"{otherLocation}{HashSuffix(otherLocation)} mvid {ModuleIdOf(other)}. Two copies mean two registries and two join-send " +
                     "owners; keep only the copy in the folder this port's LabAPI loader reads.");
             }
         }
         catch (Exception exception)
         {
             Logger.Debug($"[ServerKeybinds] Assembly identity check skipped: {exception.GetBaseException().Message}", Debug);
+        }
+    }
+
+    private static string ModuleIdOf(Assembly assembly)
+    {
+        try
+        {
+            return assembly.ManifestModule.ModuleVersionId.ToString("N").Substring(0, 12);
+        }
+        catch
+        {
+            return "unknown";
         }
     }
 
