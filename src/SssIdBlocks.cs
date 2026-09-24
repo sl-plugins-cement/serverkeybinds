@@ -10,10 +10,9 @@ namespace ServerKeybinds;
 /// <summary>
 /// The logical section a block renders under in the player's Server-Specific-Settings menu.
 ///
-/// Before API 3 the menu order was <c>Dictionary&lt;int, KeybindBlock&gt;</c> enumeration order — i.e. plugin
-/// load order — so the list read as an unsorted pile. <see cref="KeybindRegistry"/> now emits ONE
-/// <see cref="UserSettings.ServerSpecific.SSGroupHeader"/> per category, in the numeric order below, and
-/// demotes each block's own header to a reduced-padding sub-header underneath it.
+/// <see cref="KeybindRegistry"/> emits ONE <see cref="UserSettings.ServerSpecific.SSGroupHeader"/> per
+/// category, in the numeric order below, and demotes each block's own header to a reduced-padding
+/// sub-header underneath it.
 ///
 /// The numbers ARE the display order, so leave gaps when inserting. <see cref="Other"/> is deliberately last
 /// and is what an un-migrated block falls into, so forgetting <c>InCategory</c> costs placement, not
@@ -37,6 +36,14 @@ public enum SettingsCategory
     Other = 100,
 }
 
+/// <summary>
+/// The reservation table for 1000-wide setting id blocks.
+///
+/// This table is the canonical record, not the enforcement: <see cref="KeybindRegistry.EnableBlock"/> throws
+/// when two blocks share a base, whatever constants they used. A plugin may therefore ship with a new
+/// aligned base before this table catches up; add the row here in the same change so the next plugin can
+/// see it is taken. Adding a row is a bookkeeping edit, not a contract change.
+/// </summary>
 public static class SssIdBlocks
 {
     /// <summary>Width of every plugin's reserved id block. Bases must be a multiple of this.</summary>
@@ -65,11 +72,23 @@ public static class SssIdBlocks
     /// <summary>InvincibleWarMark active ability keybind.</summary>
     public const int InvincibleWarMark = 1120000;
 
+    /// <summary>AircraftCarrier surface-only grenade barrage and precision-drone controls.</summary>
+    public const int AircraftCarrier = 1130000;
+
     /// <summary>SCP-966 and night vision equipment controls.</summary>
     public const int Scp966 = 1140000;
 
     /// <summary>Ganzir aircraft, jetpack and naval insertion controls.</summary>
     public const int Scp5kGanzir = 1150000;
+
+    /// <summary>
+    /// Teaching examples in scpsl-plugin-examples. A product copied from an example must claim its own
+    /// block; this one is never deployed beside a real plugin.
+    /// </summary>
+    public const int CementExamples = 1160000;
+
+    /// <summary>SpatialSurveyMarkers survey-mode controls.</summary>
+    public const int SpatialSurveyMarkers = 1200000;
 
     // --- The registry's own reserved block ---
 
@@ -98,6 +117,9 @@ public static class SssIdBlocks
     /// player sees one switch covering every surface of the guide, not one per plugin.
     /// </summary>
     public const int NewPlayerGuide = 27000;
+
+    /// <summary>ProjectMER tool-gun schematic selector; visible only to tool-gun holders.</summary>
+    public const int ProjectMer = 28000;
 
     /// <summary>CustomizableUIMeow HUD toggles (already based at 530210; the block covers its full span).</summary>
     public const int CustomizableUi = 530000;
