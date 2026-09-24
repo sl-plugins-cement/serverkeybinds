@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LabApi.Features.Wrappers;
+using TMPro;
 using UnityEngine;
 using UserSettings.ServerSpecific;
 
@@ -260,6 +261,79 @@ public sealed class KeybindBlock
         ValueSettings[local] = new SliderSetting(
             local, label, minValue, maxValue, Mathf.Clamp(defaultValue, minValue, maxValue), integer,
             valueToStringFormat, finalDisplayFormat, hint, onChanged);
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a native <see cref="SSButton"/>. <paramref name="onPressed"/> fires once per click, or
+    /// once per completed hold when <paramref name="holdTimeSeconds"/> is set. A button has no stored value,
+    /// so nothing fires on acquisition.
+    /// </summary>
+    public KeybindBlock AddButton(
+        int local,
+        string label,
+        string buttonText,
+        string hint,
+        Action<Player> onPressed,
+        float? holdTimeSeconds = null)
+    {
+        ValidateAvailableValueLocal(local);
+        if (string.IsNullOrEmpty(buttonText))
+        {
+            throw new ArgumentException("A button needs a caption.", nameof(buttonText));
+        }
+
+        ValueSettings[local] = new ButtonSetting(
+            local, label, buttonText, holdTimeSeconds, hint, onPressed ?? throw new ArgumentNullException(nameof(onPressed)));
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a native <see cref="SSPlaintextSetting"/> and invokes <paramref name="onChanged"/> with the
+    /// text the client reports. Like every value setting, the client reports on acquisition as well as on
+    /// change, so the first callback carries the player's saved text (or an empty string), not an edit.
+    /// </summary>
+    public KeybindBlock AddPlaintext(
+        int local,
+        string label,
+        string hint,
+        Action<Player, string> onChanged,
+        string placeholder = "...",
+        int characterLimit = 64,
+        TMP_InputField.ContentType contentType = TMP_InputField.ContentType.Standard)
+    {
+        ValidateAvailableValueLocal(local);
+        if (characterLimit <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(characterLimit), characterLimit, "Character limit must be positive.");
+        }
+
+        ValueSettings[local] = new PlaintextSetting(
+            local, label, placeholder, characterLimit, contentType, hint, onChanged ?? throw new ArgumentNullException(nameof(onChanged)));
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Escape hatch: registers any native <see cref="ServerSpecificSettingBase"/> the typed helpers do not
+    /// cover, so a new native entry type never needs a registry change. <paramref name="factory"/> receives
+    /// the absolute setting id it MUST construct the entry with, and the recipient of a personalised send
+    /// (null when building the shared array), and is called once per send, so keep it cheap.
+    /// <paramref name="onResponse"/> receives the raw deserialised client response for that id; the registry
+    /// applies its visibility gate but no other interpretation, so a keybind registered this way sees both
+    /// edges and no press latch.
+    /// </summary>
+    public KeybindBlock AddNative(
+        int local,
+        string label,
+        Func<int, Player?, ServerSpecificSettingBase> factory,
+        Action<Player, ServerSpecificSettingBase>? onResponse = null)
+    {
+        ValidateAvailableValueLocal(local);
+        ValueSettings[local] = new NativeSetting(
+            local, label ?? string.Empty, factory ?? throw new ArgumentNullException(nameof(factory)), onResponse);
         KeybindRegistry.OnBlockChanged(this);
         return this;
     }
@@ -565,5 +639,90 @@ public sealed class KeybindBlock
                 _onChanged(player, Mathf.Clamp(slider.SyncFloatValue, _min, _max));
             }
         }
+    }
+
+    private sealed class ButtonSetting : ValueSetting
+    {
+        private readonly string _buttonText;
+        private readonly float? _holdTimeSeconds;
+        private readonly Action<Player> _onPressed;
+
+        public ButtonSetting(int local, string label, string buttonText, float? holdTimeSeconds, string hint, Action<Player> onPressed)
+            : base(local, label, hint)
+        {
+            _buttonText = buttonText;
+            _holdTimeSeconds = holdTimeSeconds;
+            _onPressed = onPressed;
+        }
+
+        public override ServerSpecificSettingBase Build(int absoluteId, Player? player) =>
+            new SSButton(absoluteId, Label, _buttonText, _holdTimeSeconds, Hint);
+
+        public override void Invoke(Player player, ServerSpecificSettingBase setting)
+        {
+            if (setting is SSButton)
+            {
+                _onPressed(player);
+            }
+        }
+    }
+
+    private sealed class PlaintextSetting : ValueSetting
+    {
+        private readonly string _placeholder;
+        private readonly int _characterLimit;
+        private readonly TMP_InputField.ContentType _contentType;
+        private readonly Action<Player, string> _onChanged;
+
+        public PlaintextSetting(int local, string label, string placeholder, int characterLimit, TMP_InputField.ContentType contentType, string hint, Action<Player, string> onChanged)
+            : base(local, label, hint)
+        {
+            _placeholder = placeholder;
+            _characterLimit = characterLimit;
+            _contentType = contentType;
+            _onChanged = onChanged;
+        }
+
+        public override ServerSpecificSettingBase Build(int absoluteId, Player? player) =>
+            new SSPlaintextSetting(absoluteId, Label, _placeholder, _characterLimit, _contentType, Hint);
+
+        public override void Invoke(Player player, ServerSpecificSettingBase setting)
+        {
+            if (setting is SSPlaintextSetting plaintext)
+            {
+                string text = plaintext.SyncInputText ?? string.Empty;
+                _onChanged(player, text.Length > _characterLimit ? text.Substring(0, _characterLimit) : text);
+            }
+        }
+    }
+
+    private sealed class NativeSetting : ValueSetting
+    {
+        private readonly Func<int, Player?, ServerSpecificSettingBase> _factory;
+        private readonly Action<Player, ServerSpecificSettingBase>? _onResponse;
+
+        public NativeSetting(int local, string label, Func<int, Player?, ServerSpecificSettingBase> factory, Action<Player, ServerSpecificSettingBase>? onResponse)
+            : base(local, label, string.Empty)
+        {
+            _factory = factory;
+            _onResponse = onResponse;
+        }
+
+        public override ServerSpecificSettingBase Build(int absoluteId, Player? player)
+        {
+            ServerSpecificSettingBase setting = _factory(absoluteId, player)
+                ?? throw new InvalidOperationException($"Native setting factory for id {absoluteId} returned null.");
+            if (setting.SettingId != absoluteId)
+            {
+                // The id is the whole contract: a wrong one escapes the block, collides with someone else's
+                // setting, and routes that player's responses to the wrong handler.
+                throw new InvalidOperationException(
+                    $"Native setting factory for id {absoluteId} built an entry with id {setting.SettingId}.");
+            }
+
+            return setting;
+        }
+
+        public override void Invoke(Player player, ServerSpecificSettingBase setting) => _onResponse?.Invoke(player, setting);
     }
 }

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Security.Cryptography;
 using LabApi.Features.Wrappers;
 using LabApi.Loader;
 using PlayerRoles;
@@ -36,11 +39,12 @@ namespace ServerKeybinds;
 public static class KeybindRegistry
 {
     /// <summary>
-    /// What this registry currently implements, for logs and diagnostics.
+    /// Diagnostic level of the contract, frozen at 6. It appears in the startup log so a deployed DLL can be
+    /// identified; nothing branches on it and consumers must not probe it or document "requires API N".
     ///
-    /// It is NOT a compatibility gate and nothing branches on it. Every consumer in this metarepo is built
-    /// and deployed together with this assembly, so "the loaded registry might be older" is not a state
-    /// that can occur; a mismatched DLL is a deployment bug and should fail loudly, not be papered over.
+    /// The public surface is additive-only: members are never removed or re-signatured, so a consumer built
+    /// against any earlier level runs against this assembly. Every server runs the newest build. New native
+    /// entry types are covered without a contract change through <see cref="KeybindBlock.AddNative"/>.
     /// </summary>
     public static int ApiVersion => 6;
 
@@ -89,6 +93,7 @@ public static class KeybindRegistry
         HasPressedLatch,
         ReleasePressedForReconcile);
     private static bool _commandRegistered;
+    private static bool _identityLogged;
     private static bool _subscribed;
     private static Predicate<ReferenceHub>? _previousJoinFilter;
 
@@ -468,6 +473,7 @@ public static class KeybindRegistry
         }
 
         _subscribed = true;
+        LogAssemblyIdentityOnce();
         _previousJoinFilter = ServerSpecificSettingsSync.SendOnJoinFilter;
         ServerSpecificSettingsSync.SendOnJoinFilter = SuppressNativeJoinSend;
         ServerSpecificSettingsSync.ServerOnSettingValueReceived += OnSettingValueReceived;
@@ -763,6 +769,81 @@ public static class KeybindRegistry
     }
 
     private static bool SuppressNativeJoinSend(ReferenceHub _) => false;
+
+    /// <summary>
+    /// Logs which build this is and where it was loaded from, and shouts if a second ServerKeybinds assembly
+    /// is loaded in the process. Two copies (a stale global one beside the port one, or a fork beside the
+    /// mainline) mean two registries each believing it owns the join send; every such incident so far was
+    /// found late from behaviour, so surface it at the first Enable instead.
+    /// </summary>
+    private static void LogAssemblyIdentityOnce()
+    {
+        if (_identityLogged)
+        {
+            return;
+        }
+
+        _identityLogged = true;
+        try
+        {
+            Assembly self = typeof(KeybindRegistry).Assembly;
+            AssemblyName selfName = self.GetName();
+            string location = LocationOf(self);
+            Logger.Info(
+                $"[ServerKeybinds] {selfName.Name} {selfName.Version} (API {ApiVersion}) loaded from {location}" +
+                $"{HashSuffix(location)}.");
+
+            foreach (Assembly other in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (ReferenceEquals(other, self) ||
+                    !string.Equals(other.GetName().Name, selfName.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string otherLocation = LocationOf(other);
+                Logger.Error(
+                    $"[ServerKeybinds] A second {selfName.Name} assembly ({other.GetName().Version}) is loaded from " +
+                    $"{otherLocation}{HashSuffix(otherLocation)}. Two copies mean two registries and two join-send " +
+                    "owners; keep only the copy in the folder this port's LabAPI loader reads.");
+            }
+        }
+        catch (Exception exception)
+        {
+            Logger.Debug($"[ServerKeybinds] Assembly identity check skipped: {exception.GetBaseException().Message}", Debug);
+        }
+    }
+
+    private static string LocationOf(Assembly assembly)
+    {
+        try
+        {
+            return string.IsNullOrEmpty(assembly.Location) ? "(in-memory)" : assembly.Location;
+        }
+        catch
+        {
+            return "(unknown)";
+        }
+    }
+
+    private static string HashSuffix(string location)
+    {
+        if (!File.Exists(location))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using SHA256 sha = SHA256.Create();
+            using FileStream stream = File.OpenRead(location);
+            return " sha256 " + BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", string.Empty).ToLowerInvariant();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
 
     private readonly struct ActiveBinding
     {

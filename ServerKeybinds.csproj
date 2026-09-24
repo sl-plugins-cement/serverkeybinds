@@ -3,19 +3,18 @@
     <TargetFramework>net48</TargetFramework>
     <OutputType>Library</OutputType>
     <LangVersion>latest</LangVersion>
-    <!-- Kept in lockstep with KeybindRegistry.ApiVersion so the deployed DLL can be identified from
-         its file properties alone. It is NOT a binding boundary: this assembly is not strong-named
-         (PublicKeyToken=null), and the CLR ignores version, culture and token when binding those. An
-         old consumer therefore still loads against a new DLL - which is why consumers must probe for
-         API 4 members by reflection before calling them, not trust a version number. -->
-    <AssemblyVersion>6.0.0.0</AssemblyVersion>
-    <FileVersion>6.0.0.0</FileVersion>
-    <Version>6.0.0</Version>
+    <!-- SemVer for humans; the registry logs it at startup together with the file hash. The assembly is
+         not strong-named, so the CLR binds by simple name and any build satisfies any consumer. The public
+         surface is additive-only, so that is safe as long as every server runs the newest build. Bump the
+         minor for additions; the major is reserved for a break, which the contract forbids. -->
+    <AssemblyVersion>6.1.0.0</AssemblyVersion>
+    <FileVersion>6.1.0.0</FileVersion>
+    <Version>6.1.0</Version>
     <Nullable>enable</Nullable>
     <AssemblyName>ServerKeybinds</AssemblyName>
     <RootNamespace>ServerKeybinds</RootNamespace>
-    <!-- Shared LIBRARY (not a LabAPI plugin): deploy to %APPDATA%\SCP Secret Laboratory\LabAPI\dependencies\global
-         so it loads once into the single AppDomain (one shared keybind/dropdown/slider registry). -->
+    <!-- Shared LIBRARY (not a LabAPI plugin). Consumers build it from source through a ProjectReference;
+         exactly ONE copy is deployed per server, in the folder that port's LabAPI loader reads (see README). -->
     <SCP_SL_MANAGED Condition="'$(SCP_SL_MANAGED)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</SCP_SL_MANAGED>
   </PropertyGroup>
 
