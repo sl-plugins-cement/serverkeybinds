@@ -17,9 +17,9 @@ public sealed class KeybindsCommand : ICommand
 
     public string[] Aliases => ["skb"];
 
-    public string Description => "ServerKeybinds diagnostics: status <id|name> | resend <id|name> | trace on|off";
+    public string Description => "ServerKeybinds diagnostics: status <id|name> | resend <id|name> | trace on|off | foreign [block|merge]";
 
-    private const string Usage = "Usage: keybinds status <id|name> | resend <id|name> | trace on|off";
+    private const string Usage = "Usage: keybinds status <id|name> | resend <id|name> | trace on|off | foreign [block|merge]";
 
     public bool Execute(ArraySegment<string> arguments, ICommandSender sender, out string response)
     {
@@ -38,6 +38,8 @@ public sealed class KeybindsCommand : ICommand
                 return Resend(arguments, out response);
             case "trace":
                 return Trace(arguments, out response);
+            case "foreign":
+                return Foreign(arguments, out response);
             default:
                 response = Usage;
                 return false;
@@ -115,6 +117,33 @@ public sealed class KeybindsCommand : ICommand
         }
 
         response = $"ServerKeybinds press trace is now {(KeybindRegistry.PressTrace ? "ON" : "OFF")}.";
+        return true;
+    }
+
+    private static bool Foreign(ArraySegment<string> arguments, out string response)
+    {
+        string value = arguments.Count > 1 ? arguments.At(1).Trim().ToLowerInvariant() : string.Empty;
+        switch (value)
+        {
+            case "block":
+                KeybindRegistry.ForeignPolicy = ForeignSettingsPolicy.Block;
+                break;
+            case "merge":
+                KeybindRegistry.ForeignPolicy = ForeignSettingsPolicy.Merge;
+                break;
+            case "":
+                break;
+            default:
+                response = "Usage: keybinds foreign [block|merge]";
+                return false;
+        }
+
+        string blocked = KeybindRegistry.BlockedForeignSettings.Count == 0
+            ? "none seen"
+            : string.Join(", ", KeybindRegistry.BlockedForeignSettings
+                .OrderBy(pair => pair.Key)
+                .Select(pair => $"{pair.Key} ({pair.Value})"));
+        response = $"Foreign settings policy: {KeybindRegistry.ForeignPolicy}. Foreign ids seen this process: {blocked}.";
         return true;
     }
 

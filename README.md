@@ -71,8 +71,8 @@ header and 1..999 are entries. `SssIdBlocks` is the reservation table; the runti
 enforcement: `ClaimBlock` rejects a base that is not 1000-aligned or equals `RegistryHeaders`, and
 `Enable()` throws when two blocks share a base, whatever constants they used. A plugin may ship
 with a new aligned base and add the table row in the same change; adding a row is bookkeeping,
-not a contract change. A foreign (non-registry) setting whose id falls inside a claimed block is
-warned about once per id.
+not a contract change. Settings written into `DefinedSettings` by anything other than a block are
+foreign; see [Foreign settings](#foreign-settings).
 
 | Base | Constant | Owner |
 | --- | --- | --- |
@@ -83,18 +83,24 @@ warned about once per id.
 | 1100000 | `GocNuke` | goc-nuke (reserved, unused) |
 | 1110000 | `SpinBot` | SpinBot observer controls |
 | 1120000 | `InvincibleWarMark` | InvincibleWarMark ability |
-| 1130000 | `AircraftCarrier` | AircraftCarrier barrage and drone |
+| 1130000 | `ScpslBotWarmup` | SCPSLBot warmup controls (bot lane) |
+| 1131000 | `StatsBots` | StatsBots display preferences and title picker (bot lane) |
+| 1132000 | `ScpslBotTools` | SCPSLBot staff tools (bot lane) |
 | 1140000 | `Scp966` | SCP-966 and night vision |
 | 1150000 | `Scp5kGanzir` | Ganzir aircraft, jetpack and naval insertion |
 | 1160000 | `CementExamples` | scpsl-plugin-examples teaching code only; never deployed beside a product |
+| 1170000 | `AircraftCarrier` | AircraftCarrier barrage and drone |
 | 1200000 | `SpatialSurveyMarkers` | SpatialSurveyMarkers survey mode |
+| 9100000 | `ScpTiers` | ScpTiers ability keybinds; keeps its historical ids as locals 100+ |
 | 23000 | `RegistryHeaders` | the registry's own category headers; not claimable |
 | 24000 | `GlobalMusic` | shared plugin music (24001 mute, 24002 volume) |
-| 25000 | `MvpSystem` | reserved; the plugin still uses bare id 300 |
+| 25000 | `MvpSystem` | MvpSystem music toggle at local 1 |
 | 26000 | `EffectDisplay` | reserved; the plugin still uses 2030/2031 |
 | 27000 | `NewPlayerGuide` | single opt-out toggle defined by SB_WelcomeMessage, read by reinforcements-system |
 | 28000 | `ProjectMer` | tool-gun schematic selector |
-| 530000 | `CustomizableUi` | CustomizableUIMeow HUD toggles (already at 530210) |
+| 29000 | `AdditionalNameTags` | prefix toggle, custom name text and mode |
+| 30000 | `PlayerBadge` | badge picker at local 1 |
+| 530000 | `CustomizableUi` | CustomizableUIMeow HUD toggles; keeps its historical ids as locals 210+ |
 
 ## Usage
 
@@ -222,6 +228,23 @@ Sent two-button defaults, send audits, acknowledgement state and key latches are
 a reused session player id never inherits another player's state. Every per-player store is pruned
 when the player leaves; latches and pending acknowledgements are cleared on round restart.
 
+## Foreign settings
+
+The registry is the only sanctioned writer of `ServerSpecificSettingsSync.DefinedSettings`. A
+setting that another plugin writes there without a block is foreign, and
+`KeybindRegistry.ForeignPolicy` decides what happens to it:
+
+- `Block` (default): the entry is stripped from the shared array on every rebuild and on the next
+  send of any kind, so it never reaches a client, and the client's responses for that id fail the
+  game's own prevalidation. Each id is logged once as a warning and listed by `keybinds foreign`.
+- `Merge`: the previous additive behaviour, with registry entries first and foreign entries after
+  in their own order. Use it only while a server must run a plugin that has not been ported.
+
+A foreign plugin that calls the native `SendToAll` between two registry sends can still reach
+clients once; the reconcile send replaces that collection within its 30-second window. Set the
+policy from a consumer's config like `Language`, or at runtime with `keybinds foreign block|merge`;
+a change rebuilds immediately.
+
 ## Diagnostics
 
 - `KeybindRegistry.Debug` (static bool, consumer-set like `Language`; last writer wins) gates the
@@ -237,7 +260,7 @@ when the player leaves; latches and pending acknowledgements are cleared on roun
     count, reason), pending acknowledgement attempt, pressed latches, the client's accepted
     version and whether the settings tab is open.
   - `keybinds resend <id|name>` — re-pushes the personalised collection to that player.
-  - `keybinds trace on|off` — toggles `PressTrace` at runtime.
+  - `keybinds trace on|off`, `keybinds foreign [block|merge]` — toggles `PressTrace` at runtime.
 
 ## Shared plugin music
 
@@ -300,7 +323,9 @@ packet recipient filtering) and
 
 **安装。** 每台服务器只安装一份，放在该端口 `LabAPI/LabApi-<port>.yml` 加载器实际读取的目录中；SR1 生产服只加载端口目录，因此放 `LabAPI/plugins/7777`，`plugins/global` 与 `dependencies/global` 均不会被读取。放在未读取目录中的副本会被静默忽略，已读取目录中的旧副本会生效。首次 `Enable()` 输出 `[ServerKeybinds] ServerKeybinds <version> (API 6) loaded from <path> sha256 <hash>`；若进程中还加载了第二个 ServerKeybinds 程序集，会额外输出一条错误日志并给出其路径，此时必须删除陈旧或分叉的副本。
 
-**ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–28000 与 530000 为配置类插件）。
+**ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–30000、530000 与 9100000 为配置类及已接入的第三方插件，1130000–1132000 为机器人服）。
+
+**外部设置。** 注册表是 `DefinedSettings` 的唯一合法写入者。其他插件绕过注册表写入的设置称为外部设置，由 `KeybindRegistry.ForeignPolicy` 决定处理方式：`Block`（默认）在每次重建及下一次发送时剔除它们，使其永远到不了客户端，并对每个 ID 只记录一次警告，`keybinds foreign` 可列出；`Merge` 保留旧的追加合并行为，仅在服务器必须运行未接入插件时使用。运行时可用 `keybinds foreign block|merge` 切换，切换后立即重建。
 
 **条目类型。** `Header`（分组标题，作为分类标题下的子标题显示）；`AddTextArea`（只读说明，显示在标题下、按键上，客户端不回传）；`Add`（按键：上升沿/下降沿回调；默认键只是 `SuggestedKey` 建议，玩家必须自行采纳，请用说明文本告知；按 UserId 锁存，角色变化、重建与回合重启会先派发释放再清除锁存）；`AddDropdown`（回传经校验的索引）；`AddTwoButtons`（原生开关，选中 B 时回调 `true`；另有按玩家决定初始位置的重载，客户端在获取时也会回报值，请与 `DefaultTwoButtonsFor` 返回的已发送默认值比较；PlayerPrefs 键包含类型码，把下拉改为双按钮会重置玩家已保存的选择）；`AddSlider`（回传裁剪后的值）；`AddButton`（每次点击或完成长按触发一次，无存储值，获取时不触发）；`AddPlaintext`（文本框，获取时同样回报已保存文本或空串）；`AddNative`（兜底：工厂函数收到绝对 ID 与个性化发送的接收者，必须用该 ID 构造条目，回调收到原始响应，注册表只做可见性过滤，不做锁存）。
 

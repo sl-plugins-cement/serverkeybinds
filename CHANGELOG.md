@@ -4,6 +4,17 @@ All notable changes to ServerKeybinds. Versions follow the csproj `<Version>`; d
 commit dates on `main`. `KeybindRegistry.ApiVersion` was bumped in lockstep through 6.0.0 and is
 frozen at 6 as a diagnostic since 6.1.0.
 
+## 6.3.0 - 2026-09-25
+
+- Foreign settings are blocked by default: entries written into `DefinedSettings` without a
+  registry block are stripped on rebuild and on the next send, logged once per id, and listed by
+  the new `keybinds foreign` RA subcommand. `KeybindRegistry.ForeignPolicy = Merge` restores the
+  additive behaviour; `keybinds foreign block|merge` switches it at runtime.
+- Blocks reserved for the ported production plugins: `AdditionalNameTags` 29000, `PlayerBadge`
+  30000, `ScpTiers` 9100000 (historical ids kept as locals), `MvpSystem` now at 25000 local 1,
+  `CustomizableUi` 530000 with historical ids as locals 210+.
+- README id table corrected: `AircraftCarrier` is 1170000; bot lane blocks listed.
+
 ## 6.2.0 - 2026-09-25
 
 - Per-player entries ported from the bot lane fork so that fork can be retired: `AddDropdownForPlayer`

@@ -76,6 +76,37 @@ public static class KeybindRegistry
     /// </summary>
     public static bool PressTrace { get; set; }
 
+    /// <summary>
+    /// What happens to settings that other code writes into <c>DefinedSettings</c> without registering a
+    /// block. <see cref="ForeignSettingsPolicy.Block"/> (the default) strips them from the shared array and
+    /// from every send, so they never reach a client and their responses fail native prevalidation; each
+    /// stripped id is logged once and listed by <c>keybinds foreign</c>. <see cref="ForeignSettingsPolicy.Merge"/>
+    /// keeps the old additive behaviour for a server that must run an unported plugin.
+    /// </summary>
+    public static ForeignSettingsPolicy ForeignPolicy
+    {
+        get => _foreignPolicy;
+        set
+        {
+            if (_foreignPolicy == value)
+            {
+                return;
+            }
+
+            _foreignPolicy = value;
+            if (Blocks.Count > 0)
+            {
+                Rebuild();
+            }
+        }
+    }
+
+    /// <summary>Every foreign setting id stripped so far this process, with a short description of the entry.</summary>
+    public static IReadOnlyDictionary<int, string> BlockedForeignSettings => BlockedForeign;
+
+    private static ForeignSettingsPolicy _foreignPolicy = ForeignSettingsPolicy.Block;
+    private static readonly Dictionary<int, string> BlockedForeign = new();
+
     private static readonly Dictionary<int, KeybindBlock> Blocks = new();
     private static readonly Dictionary<int, ActiveBinding> ActiveBindings = new();
     private static readonly Dictionary<int, ActiveValueSetting> ActiveValueSettings = new();
@@ -208,6 +239,15 @@ public static class KeybindRegistry
     }
 
     /// <summary>A binding/header was added to a block after it was already enabled; re-merge.</summary>
+    /// <summary>Re-merges now; used by the RA command after a policy change.</summary>
+    internal static void RebuildNow()
+    {
+        if (Blocks.Count > 0)
+        {
+            Rebuild();
+        }
+    }
+
     internal static void OnBlockChanged(KeybindBlock block)
     {
         if (block.Active)
@@ -346,16 +386,24 @@ public static class KeybindRegistry
         List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active, player: null, recordSent: false).ToList();
 
         ServerSpecificSettingBase[] existingSettings = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
-        WarnOnForeignCollisions(existingSettings, ownedIds);
+        ServerSpecificSettingBase[] foreign = existingSettings.Where(setting => !ownedIds.Contains(setting.SettingId)).ToArray();
 
-        // OURS FIRST, foreign entries after. Appending used to put every registry setting behind every
-        // plugin that merges into DefinedSettings on its own (HUD toggles, music mutes), so the ability
-        // keybinds - which nothing works without - sat at the very bottom of the menu no matter how the
-        // categories were ordered. Foreign entries keep their own relative order and are otherwise
-        // untouched; the registry is the sanctioned owner of this array for metarepo plugins.
-        ServerSpecificSettingsSync.DefinedSettings = ours
-            .Concat(existingSettings.Where(setting => !ownedIds.Contains(setting.SettingId)))
-            .ToArray();
+        if (_foreignPolicy == ForeignSettingsPolicy.Block)
+        {
+            // The registry is the only sanctioned writer. Anything else in the array was put there by a
+            // plugin that bypassed it; drop it so it never reaches a client and log it so it gets ported.
+            NoteBlocked(foreign);
+            ServerSpecificSettingsSync.DefinedSettings = ours.ToArray();
+        }
+        else
+        {
+            // Merge: OURS FIRST, foreign entries after, in their own relative order. Appending used to put
+            // every registry setting behind every self-merging plugin, so the ability keybinds sat at the
+            // very bottom of the menu no matter how the categories were ordered.
+            WarnOnForeignCollisions(existingSettings, ownedIds);
+            ServerSpecificSettingsSync.DefinedSettings = ours.Concat(foreign).ToArray();
+        }
+
         SendPersonalizedToAll();
     }
 
@@ -610,9 +658,49 @@ public static class KeybindRegistry
         // must not leave a dangling header behind for them. Ours lead here too, matching Rebuild.
         List<ServerSpecificSettingBase> collection =
             BuildOrdered(block => block.Active && block.IsVisibleTo(player), player, recordSent).ToList();
+        if (_foreignPolicy == ForeignSettingsPolicy.Block)
+        {
+            // A plugin that wrote into DefinedSettings after our last Rebuild is caught here, on the next
+            // send of any kind, so the shared array never carries foreign entries for long.
+            EnforceForeignPolicy(allOwnedIds);
+            return collection;
+        }
+
         collection.AddRange((ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
             .Where(setting => !allOwnedIds.Contains(setting.SettingId)));
         return collection;
+    }
+
+    /// <summary>Strips foreign entries from the shared array if any appeared since the last rebuild.</summary>
+    private static void EnforceForeignPolicy(HashSet<int> ownedIds)
+    {
+        ServerSpecificSettingBase[] current = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
+        ServerSpecificSettingBase[] foreign = current.Where(setting => !ownedIds.Contains(setting.SettingId)).ToArray();
+        if (foreign.Length == 0)
+        {
+            return;
+        }
+
+        NoteBlocked(foreign);
+        ServerSpecificSettingsSync.DefinedSettings = current.Where(setting => ownedIds.Contains(setting.SettingId)).ToArray();
+    }
+
+    private static void NoteBlocked(ServerSpecificSettingBase[] foreign)
+    {
+        foreach (ServerSpecificSettingBase setting in foreign)
+        {
+            if (BlockedForeign.ContainsKey(setting.SettingId))
+            {
+                continue;
+            }
+
+            string description = $"{setting.GetType().Name} '{setting.Label}'";
+            BlockedForeign[setting.SettingId] = description;
+            Logger.Warn(
+                $"[ServerKeybinds] Blocked foreign setting id {setting.SettingId} ({description}): it was written to " +
+                "DefinedSettings without a registry block, so it is stripped and never sent. Port the plugin to " +
+                "KeybindRegistry.ClaimBlock, or set ForeignPolicy = Merge to tolerate it. 'keybinds foreign' lists these.");
+        }
     }
 
     /// <summary>The refresh coordinator's fingerprint of the view <paramref name="player"/> would receive now.</summary>
@@ -1199,4 +1287,14 @@ public static class KeybindRegistry
 
         public KeybindBlock.ValueSetting Setting { get; }
     }
+}
+
+/// <summary>How <see cref="KeybindRegistry"/> treats settings written into <c>DefinedSettings</c> by anything other than a registered block.</summary>
+public enum ForeignSettingsPolicy
+{
+    /// <summary>Strip them from the shared array and from every send; log each id once. The default.</summary>
+    Block,
+
+    /// <summary>Keep them after the registry's own entries, as the additive merge always did.</summary>
+    Merge,
 }
