@@ -4,6 +4,19 @@ All notable changes to ServerKeybinds. Versions follow the csproj `<Version>`; d
 commit dates on `main`. `KeybindRegistry.ApiVersion` was bumped in lockstep through 6.0.0 and is
 frozen at 6 as a diagnostic since 6.1.0.
 
+## 6.2.0 - 2026-09-25
+
+- Per-player entries ported from the bot lane fork so that fork can be retired: `AddDropdownForPlayer`
+  and `AddButtonForPlayer` with `DropdownModel`/`ButtonModel` (`Hidden` omits the entry for one player),
+  `DropdownSelection` validated against the option list that player was actually sent, and
+  `SssInterest`-routed refreshes (`SetPlayerInterests`, `InvalidatePlayer`,
+  `InvalidatePopulationBoundary`, `RequestPlayerRefresh`) through one debounced, rate-limited budget
+  that sends via the existing delivery coordinator. `keybinds status` reports the refresh budget.
+- `AddNative` factories may return null to omit the entry for that recipient.
+- Id table: `ScpslBotWarmup` 1130000, `StatsBots` 1131000, `ScpslBotTools` 1132000 recorded;
+  `AircraftCarrier` moved to 1170000 because 1130000 was already deployed on the bot lane.
+- Unit tests under `tests/PerPlayerEntries.Unit`. See `docs/per-player-entries.md`.
+
 ## 6.1.0 - 2026-09-24
 
 - Contract frozen: the public surface is additive-only and never re-signatured; every server runs

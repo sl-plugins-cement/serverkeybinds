@@ -161,6 +161,9 @@ localised by the consumer.
   receives the raw deserialised client response for that id. The registry applies its visibility
   gate and nothing else, so a keybind registered this way sees both edges and gets no press latch.
 
+Per-player entries (`AddDropdownForPlayer`, `AddButtonForPlayer`), validated selections and
+interest-routed refreshes are described in [docs/per-player-entries.md](docs/per-player-entries.md).
+
 ## Categories and order
 
 Blocks are sorted by `(category, Order, base id)`, so the menu is identical on every server

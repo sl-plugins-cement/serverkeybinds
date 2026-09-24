@@ -32,11 +32,12 @@ namespace ServerKeybinds;
 /// // block.Disable();  // in Plugin.Disable
 /// </code>
 ///
-/// API 4 owns keybinds, dropdowns, sliders, and two-button toggles, and it also owns the ORDER of the
-/// menu: blocks are grouped by <see cref="SettingsCategory"/> under one synthesised group header each, so
-/// what the player sees no longer depends on plugin load order. This ships as a dependency LIBRARY (deployed to LabAPI's <c>dependencies/global</c>), so it loads exactly
-/// once before any plugin and its statics are shared. A plugin that hard-references it but is missing the DLL
-/// fails to load entirely rather than running half-broken.
+/// The registry owns every native entry type and the ORDER of the menu: blocks are grouped by
+/// <see cref="SettingsCategory"/> under one synthesised group header each, so what the player sees does
+/// not depend on plugin load order. It ships as a shared LIBRARY built from source by every consumer and
+/// deployed exactly once per server, in the folder that port's LabAPI loader reads, so its statics are
+/// shared. A plugin that hard-references it but is missing the DLL fails to load entirely rather than
+/// running half-broken.
 /// </summary>
 public static class KeybindRegistry
 {
