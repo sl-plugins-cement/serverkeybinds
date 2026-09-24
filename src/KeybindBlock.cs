@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LabApi.Features.Wrappers;
 using TMPro;
 using UnityEngine;
@@ -158,6 +159,62 @@ public sealed class KeybindBlock
 
         ValueSettings[local] = new DropdownSetting(
             local, label, options, Mathf.Clamp(defaultIndex, 0, options.Length - 1), entryType, hint, onChanged);
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a personalised, regular (non-scrollable) dropdown whose label, option list, default and
+    /// visibility are decided PER RECIPIENT by <paramref name="modelForPlayer"/>. The resolver runs once per
+    /// send per player and must be cheap and side-effect free; return <see cref="DropdownModel.Hidden"/> to
+    /// omit the entry for that player.
+    ///
+    /// A response is validated against the option list that player was ACTUALLY sent, not against what the
+    /// resolver would return now. The client reports its stored value after every send; that first value
+    /// is an acquisition and only reaches <paramref name="onAcquired"/> (for staging-only workflows), never
+    /// <paramref name="onChanged"/>. A later different value is a change and reaches
+    /// <paramref name="onChanged"/> once. A value outside the sent list, or one whose text no longer matches
+    /// the current model, is rejected and a refresh of that player's view is requested.
+    ///
+    /// <paramref name="fallbackModel"/> only shapes the shared <c>DefinedSettings</c> array, which players
+    /// never receive; it exists so the native server prevalidates this id and type.
+    /// </summary>
+    public KeybindBlock AddDropdownForPlayer(
+        int local,
+        Func<Player, DropdownModel> modelForPlayer,
+        Action<Player, DropdownSelection> onChanged,
+        DropdownModel? fallbackModel = null,
+        Action<Player, DropdownSelection>? onAcquired = null)
+    {
+        ValidateAvailableValueLocal(local);
+        ValueSettings[local] = new PersonalizedDropdownSetting(
+            local,
+            modelForPlayer ?? throw new ArgumentNullException(nameof(modelForPlayer)),
+            onChanged ?? throw new ArgumentNullException(nameof(onChanged)),
+            fallbackModel,
+            onAcquired);
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Registers a personalised native button. <paramref name="modelForPlayer"/> decides its label, caption,
+    /// hold time, hint and visibility per recipient; return <see cref="ButtonModel.Hidden"/> to omit it. A
+    /// press carries no client-authored value, and it is ignored while the model resolves hidden, so the
+    /// callback should execute only server-side state that was previously staged and is revalidated now.
+    /// </summary>
+    public KeybindBlock AddButtonForPlayer(
+        int local,
+        Func<Player, ButtonModel> modelForPlayer,
+        Action<Player> onPressed,
+        ButtonModel? fallbackModel = null)
+    {
+        ValidateAvailableValueLocal(local);
+        ValueSettings[local] = new PersonalizedButtonSetting(
+            local,
+            modelForPlayer ?? throw new ArgumentNullException(nameof(modelForPlayer)),
+            onPressed ?? throw new ArgumentNullException(nameof(onPressed)),
+            fallbackModel);
         KeybindRegistry.OnBlockChanged(this);
         return this;
     }
@@ -383,7 +440,11 @@ public sealed class KeybindBlock
 
         foreach (ValueSetting setting in ValueSettings.Values)
         {
-            yield return setting.Build(BaseId + setting.Local, player);
+            ServerSpecificSettingBase? built = setting.Build(BaseId + setting.Local, player);
+            if (built != null)
+            {
+                yield return built;
+            }
         }
     }
 
@@ -519,7 +580,11 @@ public sealed class KeybindBlock
 
         protected string Hint { get; }
 
-        public abstract ServerSpecificSettingBase Build(int absoluteId, Player? player);
+        /// <summary>
+        /// The entry to send, or null to OMIT it from this build. A personalised entry hides itself per
+        /// recipient this way; the shared array (null player) always carries a placeholder.
+        /// </summary>
+        public abstract ServerSpecificSettingBase? Build(int absoluteId, Player? player);
 
         public abstract void Invoke(Player player, ServerSpecificSettingBase setting);
     }
@@ -548,6 +613,159 @@ public sealed class KeybindBlock
             if (setting is SSDropdownSetting dropdown)
             {
                 _onChanged(player, Mathf.Clamp(dropdown.SyncSelectionIndexValidated, 0, _options.Length - 1));
+            }
+        }
+    }
+
+    internal sealed class PersonalizedDropdownSetting : ValueSetting
+    {
+        private static readonly DropdownModel ValidationFallback = new(string.Empty, new[] { string.Empty });
+        private readonly Func<Player, DropdownModel> _modelForPlayer;
+        private readonly Action<Player, DropdownSelection> _onChanged;
+        private readonly Action<Player, DropdownSelection>? _onAcquired;
+        private readonly DropdownModel _fallback;
+
+        public PersonalizedDropdownSetting(
+            int local,
+            Func<Player, DropdownModel> modelForPlayer,
+            Action<Player, DropdownSelection> onChanged,
+            DropdownModel? fallback,
+            Action<Player, DropdownSelection>? onAcquired)
+            : base(local, fallback?.Label ?? string.Empty, fallback?.Hint ?? string.Empty)
+        {
+            _modelForPlayer = modelForPlayer;
+            _onChanged = onChanged;
+            _onAcquired = onAcquired;
+            _fallback = fallback is { Visible: true } ? fallback : ValidationFallback;
+        }
+
+        public override ServerSpecificSettingBase? Build(int absoluteId, Player? player)
+        {
+            DropdownModel model = player == null ? _fallback : Resolve(player);
+            if (player != null && !model.Visible)
+            {
+                return null;
+            }
+
+            return new SSDropdownSetting(
+                absoluteId,
+                model.Label,
+                model.Options.ToArray(),
+                model.DefaultIndex,
+                SSDropdownSetting.DropdownEntryType.Regular,
+                model.Hint);
+        }
+
+        public override void Invoke(Player player, ServerSpecificSettingBase setting)
+        {
+            if (setting is not SSDropdownSetting dropdown)
+            {
+                return;
+            }
+
+            PersonalizedDropdownResponseOutcome outcome = KeybindRegistry.TakePersonalizedDropdownResponse(
+                player,
+                dropdown.SettingId,
+                dropdown.SyncSelectionIndexRaw,
+                out DropdownSelection selection,
+                out PersonalizedDropdownResponseKind kind);
+            if (outcome == PersonalizedDropdownResponseOutcome.Duplicate)
+            {
+                return;
+            }
+
+            if (outcome == PersonalizedDropdownResponseOutcome.Stale)
+            {
+                KeybindRegistry.RejectStaleDropdownResponse(player, dropdown.SettingId, "index outside the option list that was sent");
+                return;
+            }
+
+            if (!IsStillValid(player, selection))
+            {
+                KeybindRegistry.RejectStaleDropdownResponse(player, dropdown.SettingId, "option list changed since the send");
+                return;
+            }
+
+            if (kind == PersonalizedDropdownResponseKind.Acquisition)
+            {
+                _onAcquired?.Invoke(player, selection);
+            }
+            else
+            {
+                _onChanged(player, selection);
+            }
+        }
+
+        private bool IsStillValid(Player player, DropdownSelection selection)
+        {
+            DropdownModel current = Resolve(player);
+            return current.Visible
+                && selection.Index >= 0
+                && selection.Index < current.Options.Count
+                && string.Equals(current.Options[selection.Index], selection.Value, StringComparison.Ordinal);
+        }
+
+        private DropdownModel Resolve(Player player)
+        {
+            try
+            {
+                return _modelForPlayer(player) ?? DropdownModel.Hidden;
+            }
+            catch
+            {
+                // A presentation resolver cannot be allowed to cost the recipient their entire SSS pack.
+                return DropdownModel.Hidden;
+            }
+        }
+    }
+
+    internal sealed class PersonalizedButtonSetting : ValueSetting
+    {
+        private static readonly ButtonModel ValidationFallback = new(string.Empty, string.Empty);
+        private readonly Func<Player, ButtonModel> _modelForPlayer;
+        private readonly Action<Player> _onPressed;
+        private readonly ButtonModel _fallback;
+
+        public PersonalizedButtonSetting(
+            int local,
+            Func<Player, ButtonModel> modelForPlayer,
+            Action<Player> onPressed,
+            ButtonModel? fallback)
+            : base(local, fallback?.Label ?? string.Empty, fallback?.Hint ?? string.Empty)
+        {
+            _modelForPlayer = modelForPlayer;
+            _onPressed = onPressed;
+            _fallback = fallback is { Visible: true } ? fallback : ValidationFallback;
+        }
+
+        public override ServerSpecificSettingBase? Build(int absoluteId, Player? player)
+        {
+            ButtonModel model = player == null ? _fallback : Resolve(player);
+            if (player != null && !model.Visible)
+            {
+                return null;
+            }
+
+            return new SSButton(absoluteId, model.Label, model.ButtonText, model.HoldTimeSeconds, model.Hint);
+        }
+
+        public override void Invoke(Player player, ServerSpecificSettingBase setting)
+        {
+            if (setting is SSButton && Resolve(player).Visible)
+            {
+                _onPressed(player);
+            }
+        }
+
+        private ButtonModel Resolve(Player player)
+        {
+            try
+            {
+                return _modelForPlayer(player) ?? ButtonModel.Hidden;
+            }
+            catch
+            {
+                return ButtonModel.Hidden;
             }
         }
     }
@@ -708,10 +926,16 @@ public sealed class KeybindBlock
             _onResponse = onResponse;
         }
 
-        public override ServerSpecificSettingBase Build(int absoluteId, Player? player)
+        public override ServerSpecificSettingBase? Build(int absoluteId, Player? player)
         {
-            ServerSpecificSettingBase setting = _factory(absoluteId, player)
-                ?? throw new InvalidOperationException($"Native setting factory for id {absoluteId} returned null.");
+            // A null result omits the entry from this build, which is how a native entry hides itself for
+            // one recipient (or from the shared array). The id check below still applies to what is built.
+            ServerSpecificSettingBase? setting = _factory(absoluteId, player);
+            if (setting == null)
+            {
+                return null;
+            }
+
             if (setting.SettingId != absoluteId)
             {
                 // The id is the whole contract: a wrong one escapes the block, collides with someone else's

@@ -7,9 +7,9 @@
          not strong-named, so the CLR binds by simple name and any build satisfies any consumer. The public
          surface is additive-only, so that is safe as long as every server runs the newest build. Bump the
          minor for additions; the major is reserved for a break, which the contract forbids. -->
-    <AssemblyVersion>6.1.0.0</AssemblyVersion>
-    <FileVersion>6.1.0.0</FileVersion>
-    <Version>6.1.0</Version>
+    <AssemblyVersion>6.2.0.0</AssemblyVersion>
+    <FileVersion>6.2.0.0</FileVersion>
+    <Version>6.2.0</Version>
     <Nullable>enable</Nullable>
     <AssemblyName>ServerKeybinds</AssemblyName>
     <RootNamespace>ServerKeybinds</RootNamespace>
