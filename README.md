@@ -100,6 +100,7 @@ foreign; see [Foreign settings](#foreign-settings).
 | 28000 | `ProjectMer` | tool-gun schematic selector |
 | 29000 | `AdditionalNameTags` | prefix toggle, custom name text and mode |
 | 30000 | `PlayerBadge` | badge picker at local 1 |
+| 31000 | `SecretLabNAudioDemo` | SecretLabNAudio.Demo grab-slider keybind at local 1 |
 | 530000 | `CustomizableUi` | CustomizableUIMeow HUD toggles; keeps its historical ids as locals 210+ |
 
 ## Usage

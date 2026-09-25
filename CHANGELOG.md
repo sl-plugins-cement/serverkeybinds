@@ -6,6 +6,7 @@ frozen at 6 as a diagnostic since 6.1.0.
 
 ## 6.3.0 - 2026-09-25
 
+- Block 31000 reserved for the SecretLabNAudio.Demo sample keybind.
 - Foreign settings are blocked by default: entries written into `DefinedSettings` without a
   registry block are stripped on rebuild and on the next send, logged once per id, and listed by
   the new `keybinds foreign` RA subcommand. `KeybindRegistry.ForeignPolicy = Merge` restores the

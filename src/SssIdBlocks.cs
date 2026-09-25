@@ -139,6 +139,9 @@ public static class SssIdBlocks
     /// <summary>PlayerBadge badge picker (local 1; was 530270 inside the CustomizableUIMeow span).</summary>
     public const int PlayerBadge = 30000;
 
+    /// <summary>SecretLabNAudio.Demo sample plugin: its grab-slider keybind at local 1.</summary>
+    public const int SecretLabNAudioDemo = 31000;
+
     /// <summary>
     /// CustomizableUIMeow HUD toggles. The plugin keeps its historical ids (530210 header, toggles above it)
     /// as locals 210+ inside this block, so players' saved HUD choices survive the move to the registry.
