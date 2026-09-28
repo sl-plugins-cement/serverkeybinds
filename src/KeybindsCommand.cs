@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using CommandSystem;
 using LabApi.Features.Wrappers;
@@ -143,9 +144,17 @@ public sealed class KeybindsCommand : ICommand
             : string.Join(", ", KeybindRegistry.BlockedForeignSettings
                 .OrderBy(pair => pair.Key)
                 .Select(pair => $"{pair.Key} ({pair.Value})"));
-        response = $"Foreign settings policy: {KeybindRegistry.ForeignPolicy}. Foreign ids seen this process: {blocked}.";
+        string present = Describe(KeybindRegistry.ForeignSettingsPresent());
+        string yielded = Describe(KeybindRegistry.YieldedSettingIds);
+        response = $"Foreign settings policy: {KeybindRegistry.ForeignPolicy}. Id offset: {KeybindRegistry.IdOffset}. " +
+            $"Foreign entries kept now: {present}. Our ids withdrawn for a foreign entry: {yielded}. " +
+            $"Foreign ids blocked this process: {blocked}.";
         return true;
     }
+
+    private static string Describe(IReadOnlyDictionary<int, string> entries) => entries.Count == 0
+        ? "none"
+        : string.Join(", ", entries.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key} ({pair.Value})"));
 
     private static bool TryResolveTarget(ArraySegment<string> arguments, string subcommand, out Player? player, out string response)
     {

@@ -164,8 +164,11 @@ public static class SssIdBlocks
         SettingsCategory.Other,
     };
 
-    /// <summary>The stable SSS id of the synthesised group header for <paramref name="category"/>.</summary>
-    public static int CategoryHeaderId(SettingsCategory category) => RegistryHeaders + (int)category;
+    /// <summary>
+    /// The stable SSS id of the synthesised group header for <paramref name="category"/>, including
+    /// <see cref="KeybindRegistry.IdOffset"/>. The constants in this table are unshifted bases.
+    /// </summary>
+    public static int CategoryHeaderId(SettingsCategory category) => KeybindRegistry.IdOffset + RegistryHeaders + (int)category;
 
     /// <summary>True if <paramref name="settingId"/> falls inside the 1000-wide block at <paramref name="baseId"/>.</summary>
     public static bool Contains(int baseId, int settingId) =>

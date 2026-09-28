@@ -78,10 +78,11 @@ public static class KeybindRegistry
 
     /// <summary>
     /// What happens to settings that other code writes into <c>DefinedSettings</c> without registering a
-    /// block. <see cref="ForeignSettingsPolicy.Block"/> (the default) strips them from the shared array and
-    /// from every send, so they never reach a client and their responses fail native prevalidation; each
-    /// stripped id is logged once and listed by <c>keybinds foreign</c>. <see cref="ForeignSettingsPolicy.Merge"/>
-    /// keeps the old additive behaviour for a server that must run an unported plugin.
+    /// block. This product build defaults to <see cref="ForeignSettingsPolicy.Merge"/>: it ships onto servers
+    /// whose other plugins append their own settings, so their entries are kept (after ours, in their own
+    /// order), and a foreign entry whose id collides with one of ours wins while our entry is withdrawn.
+    /// <see cref="ForeignSettingsPolicy.Block"/> strips foreign entries from the shared array and from every
+    /// send; an operator may still select it with <c>keybinds foreign block</c>.
     /// </summary>
     public static ForeignSettingsPolicy ForeignPolicy
     {
@@ -104,7 +105,69 @@ public static class KeybindRegistry
     /// <summary>Every foreign setting id stripped so far this process, with a short description of the entry.</summary>
     public static IReadOnlyDictionary<int, string> BlockedForeignSettings => BlockedForeign;
 
-    private static ForeignSettingsPolicy _foreignPolicy = ForeignSettingsPolicy.Block;
+    /// <summary>
+    /// Added to every id this registry emits: each claimed block base (so every entry inside it) and the
+    /// synthesised category headers. It moves the whole allocation of this server's registry into a range
+    /// other plugins are unlikely to use. Must be a non-negative multiple of <see cref="SssIdBlocks.BlockWidth"/>
+    /// no larger than <see cref="MaxIdOffset"/>, and set before the first <see cref="ClaimBlock"/>; after that
+    /// only the current value is accepted, because live blocks and clients' saved values use the old ids.
+    /// </summary>
+    public static int IdOffset
+    {
+        get => _idOffset;
+        set
+        {
+            if (value < 0 || value > MaxIdOffset || value % SssIdBlocks.BlockWidth != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    $"The id offset must be a multiple of {SssIdBlocks.BlockWidth} between 0 and {MaxIdOffset}.");
+            }
+
+            if (value == _idOffset)
+            {
+                return;
+            }
+
+            if (_idOffsetLocked)
+            {
+                throw new InvalidOperationException(
+                    $"The id offset is already {_idOffset} because a block was claimed; restart the server to change it.");
+            }
+
+            _idOffset = value;
+        }
+    }
+
+    /// <summary>The largest <see cref="IdOffset"/>; it keeps every reserved block base below <see cref="int.MaxValue"/>.</summary>
+    public const int MaxIdOffset = 2_000_000_000;
+
+    /// <summary>Our setting ids currently withdrawn because a foreign entry already uses them, with that entry's description.</summary>
+    public static IReadOnlyDictionary<int, string> YieldedSettingIds => Yielded;
+
+    /// <summary>The foreign entries in the shared array right now (entries this registry did not write), by id.</summary>
+    public static IReadOnlyDictionary<int, string> ForeignSettingsPresent()
+    {
+        Dictionary<int, string> present = new();
+        foreach (ServerSpecificSettingBase setting in ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
+        {
+            if (setting != null && !Emitted.Contains(setting))
+            {
+                present[setting.SettingId] = $"{setting.GetType().Name} '{setting.Label}'";
+            }
+        }
+
+        return present;
+    }
+
+    private static int _idOffset;
+    private static bool _idOffsetLocked;
+    private static readonly Dictionary<int, string> Yielded = new();
+    private static readonly HashSet<int> ReportedCollisions = new();
+
+    /// <summary>The exact entries the last rebuild wrote into the shared array; anything else there is foreign.</summary>
+    private static readonly HashSet<ServerSpecificSettingBase> Emitted = new(ReferenceComparer.Instance);
+
+    private static ForeignSettingsPolicy _foreignPolicy = ForeignSettingsPolicy.Merge;
     private static readonly Dictionary<int, string> BlockedForeign = new();
 
     private static readonly Dictionary<int, KeybindBlock> Blocks = new();
@@ -184,7 +247,8 @@ public static class KeybindRegistry
         // The actual claim (and the collision check) happens at Enable, so that a plugin reload — which
         // Disables (releasing the base) then Enables again — can re-claim its own block without throwing.
         // Blocks are fixed-width and 1000-aligned, so two blocks can only collide if they share a base.
-        return new KeybindBlock(baseId, ownerName);
+        _idOffsetLocked = true;
+        return new KeybindBlock(baseId + _idOffset, ownerName);
     }
 
     /// <summary>Every active keybind across all plugins, for diagnostics (e.g. a "list keybinds" admin command).</summary>
@@ -300,11 +364,20 @@ public static class KeybindRegistry
             if (current != block.Category)
             {
                 current = block.Category;
-                yield return new SSGroupHeader(SssIdBlocks.CategoryHeaderId(block.Category), CategoryLabel(block.Category));
+                int headerId = SssIdBlocks.CategoryHeaderId(block.Category);
+                if (!Yielded.ContainsKey(headerId))
+                {
+                    yield return new SSGroupHeader(headerId, CategoryLabel(block.Category));
+                }
             }
 
             foreach (ServerSpecificSettingBase setting in block.BuildSettings(player))
             {
+                if (Yielded.ContainsKey(setting.SettingId))
+                {
+                    continue;
+                }
+
                 if (ledger != null)
                 {
                     if (setting is SSTwoButtonsSetting twoButtons)
@@ -364,8 +437,22 @@ public static class KeybindRegistry
         }
 
         ReleaseAllPressed("registry rebuild");
+        ServerSpecificSettingBase[] existingSettings = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
+
+        // Merge: a foreign entry is anything this registry did not write itself, whatever its id. Where it
+        // shares an id with one of ours it keeps the id and ours is withdrawn, so the other plugin keeps
+        // working and only our entry goes missing. Block keeps the id-based strip.
+        ServerSpecificSettingBase[] foreign = _foreignPolicy == ForeignSettingsPolicy.Block
+            ? existingSettings.Where(setting => !ownedIds.Contains(setting.SettingId)).ToArray()
+            : existingSettings.Where(setting => !Emitted.Contains(setting)).ToArray();
+        Yielded.Clear();
         ActiveBindings.Clear();
         ActiveValueSettings.Clear();
+        if (_foreignPolicy == ForeignSettingsPolicy.Merge)
+        {
+            YieldTo(foreign, ownedIds);
+        }
+
         foreach (KeybindBlock block in Blocks.Values)
         {
             if (!block.Active)
@@ -375,18 +462,23 @@ public static class KeybindRegistry
 
             foreach (KeyValuePair<int, KeybindBlock.Binding> pair in block.Bindings)
             {
-                ActiveBindings[block.BaseId + pair.Key] = new ActiveBinding(block, pair.Value);
+                if (!Yielded.ContainsKey(block.BaseId + pair.Key))
+                {
+                    ActiveBindings[block.BaseId + pair.Key] = new ActiveBinding(block, pair.Value);
+                }
             }
             foreach (KeyValuePair<int, KeybindBlock.ValueSetting> pair in block.ValueSettings)
             {
-                ActiveValueSettings[block.BaseId + pair.Key] = new ActiveValueSetting(block, pair.Value);
+                if (!Yielded.ContainsKey(block.BaseId + pair.Key))
+                {
+                    ActiveValueSettings[block.BaseId + pair.Key] = new ActiveValueSetting(block, pair.Value);
+                }
             }
         }
 
         List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active, player: null, recordSent: false).ToList();
-
-        ServerSpecificSettingBase[] existingSettings = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
-        ServerSpecificSettingBase[] foreign = existingSettings.Where(setting => !ownedIds.Contains(setting.SettingId)).ToArray();
+        Emitted.Clear();
+        Emitted.UnionWith(ours);
 
         if (_foreignPolicy == ForeignSettingsPolicy.Block)
         {
@@ -666,9 +758,71 @@ public static class KeybindRegistry
             return collection;
         }
 
-        collection.AddRange((ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
-            .Where(setting => !allOwnedIds.Contains(setting.SettingId)));
+        // A plugin may have appended since our last rebuild. If it took one of our ids, withdraw ours now
+        // (from this send and from the shared array) rather than send two entries with the same id.
+        ServerSpecificSettingBase[] foreign = (ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>())
+            .Where(setting => !Emitted.Contains(setting)).ToArray();
+        if (YieldTo(foreign, allOwnedIds))
+        {
+            collection.RemoveAll(setting => Yielded.ContainsKey(setting.SettingId));
+        }
+
+        collection.AddRange(foreign);
         return collection;
+    }
+
+    /// <summary>
+    /// Withdraws every id of ours that a foreign entry uses: our entry leaves the shared array and every
+    /// later send, and client responses for that id are no longer routed to our handlers. Each id is
+    /// logged once. True when a new id was withdrawn.
+    /// </summary>
+    private static bool YieldTo(IEnumerable<ServerSpecificSettingBase> foreign, HashSet<int> ownedIds)
+    {
+        bool changed = false;
+        foreach (ServerSpecificSettingBase setting in foreign)
+        {
+            int id = setting.SettingId;
+            if (!ownedIds.Contains(id) || Yielded.ContainsKey(id))
+            {
+                continue;
+            }
+
+            string description = $"{setting.GetType().Name} '{setting.Label}'";
+            Yielded[id] = description;
+            ActiveBindings.Remove(id);
+            ActiveValueSettings.Remove(id);
+            changed = true;
+            if (ReportedCollisions.Add(id))
+            {
+                Logger.Error(
+                    $"[ServerKeybinds] Setting id {id} is already used by another plugin ({description}). Its entry is " +
+                    $"kept and ours ({OwnerOf(id)}) is withdrawn. Change the other plugin's id, or move ours with the " +
+                    "consuming plugin's setting id offset.");
+            }
+        }
+
+        if (changed && Emitted.Count > 0)
+        {
+            ServerSpecificSettingBase[] current = ServerSpecificSettingsSync.DefinedSettings ?? Array.Empty<ServerSpecificSettingBase>();
+            ServerSpecificSettingsSync.DefinedSettings = current
+                .Where(setting => !(Emitted.Contains(setting) && Yielded.ContainsKey(setting.SettingId)))
+                .ToArray();
+        }
+
+        return changed;
+    }
+
+    private static string OwnerOf(int settingId)
+    {
+        foreach (KeybindBlock block in Blocks.Values)
+        {
+            if (SssIdBlocks.Contains(block.BaseId, settingId))
+            {
+                return $"block '{block.Owner}'";
+            }
+        }
+
+        return "a category header";
     }
 
     /// <summary>Strips foreign entries from the shared array if any appeared since the last rebuild.</summary>
@@ -1196,7 +1350,7 @@ public static class KeybindRegistry
             // the module version id is a per-compilation GUID that still identifies the exact build.
             Logger.Info(
                 $"[ServerKeybinds] {selfName.Name} {selfName.Version} (API {ApiVersion}) loaded from {location}" +
-                $"{HashSuffix(location)} mvid {ModuleIdOf(self)}.");
+                $"{HashSuffix(location)} mvid {ModuleIdOf(self)}; product build, foreign settings {_foreignPolicy}, id offset {_idOffset}.");
 
             foreach (Assembly other in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -1292,9 +1446,19 @@ public static class KeybindRegistry
 /// <summary>How <see cref="KeybindRegistry"/> treats settings written into <c>DefinedSettings</c> by anything other than a registered block.</summary>
 public enum ForeignSettingsPolicy
 {
-    /// <summary>Strip them from the shared array and from every send; log each id once. The default.</summary>
+    /// <summary>Strip them from the shared array and from every send; log each id once.</summary>
     Block,
 
-    /// <summary>Keep them after the registry's own entries, as the additive merge always did.</summary>
+    /// <summary>Keep them after the registry's own entries; a foreign entry wins an id collision. The default.</summary>
     Merge,
+}
+
+/// <summary>Identity comparison: two settings with equal ids are still different entries.</summary>
+internal sealed class ReferenceComparer : IEqualityComparer<ServerSpecificSettingBase>
+{
+    public static readonly ReferenceComparer Instance = new();
+
+    public bool Equals(ServerSpecificSettingBase x, ServerSpecificSettingBase y) => ReferenceEquals(x, y);
+
+    public int GetHashCode(ServerSpecificSettingBase obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
 }
