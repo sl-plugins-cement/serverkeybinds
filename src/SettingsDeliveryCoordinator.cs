@@ -11,8 +11,12 @@ namespace ServerKeybinds;
 
 /// <summary>
 /// Owns reliable per-player settings delivery. The registry still owns collection construction; this
-/// coordinator owns join readiness retries, acknowledgement retries, and the low-frequency repair send
-/// which restores the merged collection after a foreign plugin replaces it with <c>SendToPlayer</c>.
+/// coordinator owns join readiness retries, acknowledgement retries, and a low-frequency repair send for
+/// a ready player who has not received any registry send yet (every join attempt failed).
+///
+/// This product build does not re-send to players who already received a collection. Another plugin's
+/// <c>SendToPlayer</c> replaces the client's whole collection, and on a shared server that per-player view
+/// is that plugin's to manage; re-sending ours every interval would overwrite it.
 /// </summary>
 internal sealed class SettingsDeliveryCoordinator
 {
@@ -298,7 +302,6 @@ internal sealed class SettingsDeliveryCoordinator
         while (_running)
         {
             yield return Timing.WaitForSeconds(ReconcileIntervalSeconds);
-            DateTime staleBefore = DateTime.UtcNow.AddSeconds(-ReconcileIntervalSeconds);
             foreach (Player player in Player.ReadyList.ToArray())
             {
                 if (!_running)
@@ -307,9 +310,8 @@ internal sealed class SettingsDeliveryCoordinator
                 }
 
                 string userId = player?.UserId ?? string.Empty;
-                bool sentRecently = !string.IsNullOrWhiteSpace(userId) &&
-                    _audit.TryGetValue(userId, out SendAudit audit) && audit.SentAtUtc > staleBefore;
-                if (!CanSend(player) || sentRecently ||
+                bool delivered = !string.IsNullOrWhiteSpace(userId) && _audit.ContainsKey(userId);
+                if (!CanSend(player) || delivered ||
                     (!string.IsNullOrWhiteSpace(userId) && _pending.ContainsKey(userId)) ||
                     ServerSpecificSettingsSync.IsTabOpenForUser(player!.ReferenceHub))
                 {
@@ -335,8 +337,6 @@ internal sealed class SettingsDeliveryCoordinator
 
                 _latchDeferredSince.Remove(userId);
 
-                // Foreign SendToPlayer calls replace the client's entire collection. There is no native
-                // collection hash/receipt to query, so a paced authoritative re-send is the repair seam.
                 Send(player, "reconcile", requireAcknowledgement: false);
                 yield return Timing.WaitForSeconds(ReconcilePaceSeconds);
             }
