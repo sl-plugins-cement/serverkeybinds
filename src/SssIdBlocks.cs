@@ -99,6 +99,9 @@ public static class SssIdBlocks
     /// </summary>
     public const int AircraftCarrier = 1170000;
 
+    /// <summary>SCP999 Tickle and Jelly bounce abilities.</summary>
+    public const int Scp999 = 1180000;
+
     /// <summary>SpatialSurveyMarkers survey-mode controls.</summary>
     public const int SpatialSurveyMarkers = 1200000;
 

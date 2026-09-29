@@ -90,6 +90,7 @@ foreign; see [Foreign settings](#foreign-settings).
 | 1150000 | `Scp5kGanzir` | Ganzir aircraft, jetpack and naval insertion |
 | 1160000 | `CementExamples` | scpsl-plugin-examples teaching code only; never deployed beside a product |
 | 1170000 | `AircraftCarrier` | AircraftCarrier barrage and drone |
+| 1180000 | `Scp999` | SCP-999 Tickle and Jelly bounce |
 | 1200000 | `SpatialSurveyMarkers` | SpatialSurveyMarkers survey mode |
 | 9100000 | `ScpTiers` | ScpTiers ability keybinds; keeps its historical ids as locals 100+ |
 | 23000 | `RegistryHeaders` | the registry's own category headers; not claimable |
