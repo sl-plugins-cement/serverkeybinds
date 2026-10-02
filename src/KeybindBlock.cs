@@ -94,7 +94,7 @@ public sealed class KeybindBlock
         int local,
         string content,
         SSTextArea.FoldoutMode foldout = SSTextArea.FoldoutMode.NotCollapsable,
-        string collapsedText = null)
+        string? collapsedText = null)
     {
         ValidateAvailableValueLocal(local);
         Texts.Add(new TextEntry(local, content, foldout, collapsedText));
@@ -517,7 +517,7 @@ public sealed class KeybindBlock
 
     internal readonly struct TextEntry
     {
-        public TextEntry(int local, string content, SSTextArea.FoldoutMode foldout, string collapsedText)
+        public TextEntry(int local, string content, SSTextArea.FoldoutMode foldout, string? collapsedText)
         {
             Local = local;
             Content = content;
@@ -531,7 +531,7 @@ public sealed class KeybindBlock
 
         public SSTextArea.FoldoutMode Foldout { get; }
 
-        public string CollapsedText { get; }
+        public string? CollapsedText { get; }
     }
 
     internal sealed class Binding
