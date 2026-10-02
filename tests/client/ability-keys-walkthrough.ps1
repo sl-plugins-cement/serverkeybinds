@@ -3,7 +3,8 @@ param($Context)
 # --bindings tests/client/ability-keys-bindings.json: it seeds saved keys under the production ids,
 # so a key that is still assigned on arrival proves the client-side binding survived.
 # Records what the client received as a lobby Tutorial and as SCP-079 (tier 5), then presses the
-# legacy SCP-079 repair key (R, 9100107) and the shared Ability 1 key (Z, 1090004) as SCP-079.
+# legacy SCP-079 repair key (R, 9100107) and the shared Ability 1 key (Z, 1090004) as SCP-079, and the
+# legacy SCP-096 scan key (H, 9100110) and Z as SCP-096.
 $ErrorActionPreference = 'Stop'
 $E = $Context.Evidence
 $actor = $Context.Actor.id
@@ -75,9 +76,24 @@ foreach ($id in @(9100107, 1090004)) {
     $sent = Find-Evidence "SSS actor=$actor id=$id pressed=True"
     Note "SCP-079: client press of $id $(if ($sent.Count) { 'reached the server' } else { 'not observed' })"
 }
-foreach ($pattern in @('handled by ''ScpTiers''', 'not handled', '当前房间没有可修复的损坏房门')) {
+foreach ($pattern in @('handled by ''ScpTiers''', 'not handled')) {
     $hits = Find-Evidence $pattern 2
     Note "Server log '$pattern': $($hits.Count) hit(s)"
+}
+
+# 4. SCP-096's memory scan has no tier gate: with no remembered viewers it shows a notice on screen.
+# Press the legacy scan key (H, 9100110), then the shared Ability 1 key (Z, 1090004).
+Invoke-LabServer "/forcerole $actor Scp096" | Out-File "$E\forcerole-096.txt" -Encoding utf8
+Start-Sleep -Seconds 4
+foreach ($press in @(@{ name = 'H'; code = 104 }, @{ name = 'Z'; code = 122 })) {
+    Invoke-LabInput @{ id = "scp096-$($press.name.ToLower())"; frames = 60; inputFrames = 3; keys = @($press.code); capture = $true } |
+        ConvertTo-Json -Depth 6 | Set-Content "$E\press-096-$($press.name).json" -Encoding utf8
+    Invoke-LabScreenshot -Name "scp096-after-$($press.name)" | Out-Null
+    Start-Sleep -Seconds 3
+}
+foreach ($id in @(9100110, 1090004)) {
+    $sent = Find-Evidence "SSS actor=$actor id=$id pressed=True"
+    Note "SCP-096: client press of $id $(if ($sent.Count) { 'reached the server' } else { 'not observed' })"
 }
 
 Save 'ability-keys-result' @{ actor = $actor; notes = $notes }
