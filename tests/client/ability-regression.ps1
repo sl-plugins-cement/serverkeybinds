@@ -59,8 +59,7 @@ Run-Case 'serpent' { Sub 'serpents_hand' @() } { Press 'serpent-z' @(122); Press
 Run-Case 'goc-airborne' { Sub 'goc_airborne' @() } { Press 'goc-jet' @(32, 98) -Hold 60 -Frames 120; Press 'goc-z' @(122) } @("binding='喷射背包推进'", "ability key Ability1 (player $actor) $rs")
 Run-Case 'chaos' { Sub 'chaos' @('hermetic', 'hermes') } { Press 'chaos-z' @(122); Start-Sleep -Seconds 3; Press 'chaos-ctrl-z' @(306, 122) } @("ability key Ability1 (player $actor) $rs")
 Run-Case 'mtf-medic' { Sub 'mtf' @('medic', 'corpsman') } { Press 'medic-hold' @(122) -Hold 120 -Frames 150 } @("ability key Ability1 (player $actor) $rs", "routing release to owner='Ability Keys' binding='技能 1'")
-# Delta-4's slots follow grant order (command radio or snapshot recorder first); the radio uses native controls.
-Run-Case 'delta4' { Sub 'delta4' @() } { Press 'delta4-z' @(122) -Hold 150 -Frames 180; Press 'delta4-x' @(120) -Hold 150 -Frames 180 } @($rs)
+# Delta-4 equipment answers only members of a real deployment, which a sub-role kit is not: ability-keys-delta4.ps1.
 Run-Case 'mcd' { Sub 'mcd' @() } { Press 'mcd-z' @(122); Press 'mcd-primary' @(323) } @("ability key")
 Run-Case 'qrt-no-abilities' { Sub 'qrt' @() } { Press 'qrt-z' @(122); Press 'qrt-primary' @(323) } @("ability key Ability1 (player $actor) not handled")
 
