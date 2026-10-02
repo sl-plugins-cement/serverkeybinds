@@ -61,9 +61,6 @@ public static class SssIdBlocks
     /// </summary>
     public const int AbilityKeys = 1090000;
 
-    /// <summary>Former name of <see cref="AbilityKeys"/>; the block is no longer claimed by reinforcements-system.</summary>
-    public const int Reinforcements = AbilityKeys;
-
     /// <summary>reinforcements-system Medic field-heal (was 1090200/01). A separate block so the SRA and Medic services stay independent.</summary>
     public const int ReinforcementsMedic = 1091000;
 
@@ -106,7 +103,7 @@ public static class SssIdBlocks
     /// </summary>
     public const int AircraftCarrier = 1170000;
 
-    /// <summary>SCP999 Tickle and Jelly bounce abilities.</summary>
+    /// <summary>Retired: SCP999 uses <see cref="AbilityKeys"/>. Stays reserved so a reused id cannot inherit saved keys.</summary>
     public const int Scp999 = 1180000;
 
     /// <summary>SpatialSurveyMarkers survey-mode controls.</summary>
@@ -158,11 +155,14 @@ public static class SssIdBlocks
     /// </summary>
     public const int CustomizableUi = 530000;
 
-    /// <summary>
-    /// ScpTiers ability keybinds. Keeps its historical ids (9100100 header, 9100102 storm, 9100103 overclock)
-    /// as locals 100+ inside this block so saved keys survive.
-    /// </summary>
+    /// <summary>Retired: ScpTiers uses <see cref="AbilityKeys"/>. Stays reserved so a reused id cannot inherit saved keys.</summary>
     public const int ScpTiers = 9100000;
+
+    // --- Compatibility aliases (the public surface is additive-only; do not use in new code) ---
+
+    /// <summary>Former name of <see cref="AbilityKeys"/>, from when reinforcements-system claimed the block.</summary>
+    [System.Obsolete("Use SssIdBlocks.AbilityKeys or the ServerKeybinds.AbilityKeys service.")]
+    public const int Reinforcements = AbilityKeys;
 
     /// <summary>Every declared category, in display order. Used to strip stale synthesised headers.</summary>
     public static readonly SettingsCategory[] AllCategories =

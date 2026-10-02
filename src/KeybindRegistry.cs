@@ -25,9 +25,9 @@ namespace ServerKeybinds;
 ///
 /// Usage from any plugin:
 /// <code>
-/// var block = KeybindRegistry.ClaimBlock(SssIdBlocks.Reinforcements, "Task Force")
-///     .Header("Task Force")
-///     .Add(1, "Deploy SRA", KeyCode.X, "Press while equipped to deploy.", OnDeploy);
+/// var block = KeybindRegistry.ClaimBlock(SssIdBlocks.MyPlugin, "My Plugin")
+///     .Header("My Plugin")
+///     .Add(1, "Toggle", KeyCode.V, "Toggle the feature.", OnToggle);
 /// block.Enable();  // in Plugin.Enable
 /// // block.Disable();  // in Plugin.Disable
 /// </code>
