@@ -92,6 +92,7 @@ foreign; see [Foreign settings](#foreign-settings).
 | 1170000 | `AircraftCarrier` | AircraftCarrier barrage and drone |
 | 1180000 | `Scp999` | retired; never reuse |
 | 1200000 | `SpatialSurveyMarkers` | SpatialSurveyMarkers survey mode |
+| 1210000 | `ScpProximityVoice` | SCP proximity voice hold modifier |
 | 9100000 | `ScpTiers` | retired; never reuse |
 | 23000 | `RegistryHeaders` | the registry's own category headers; not claimable |
 | 24000 | `GlobalMusic` | shared plugin music (24001 mute, 24002 volume) |

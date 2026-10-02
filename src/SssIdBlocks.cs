@@ -109,6 +109,9 @@ public static class SssIdBlocks
     /// <summary>SpatialSurveyMarkers survey-mode controls.</summary>
     public const int SpatialSurveyMarkers = 1200000;
 
+    /// <summary>SCP proximity voice hold modifier, separate from concurrent role abilities.</summary>
+    public const int ScpProximityVoice = 1210000;
+
     // --- The registry's own reserved block ---
 
     /// <summary>
