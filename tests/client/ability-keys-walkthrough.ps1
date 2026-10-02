@@ -66,7 +66,7 @@ Save 'observe-scp079' (Observe -ClientsOnly)
 
 # 3. Press the legacy repair key, then the shared Ability 1 key, inside the SCP-079 interface.
 foreach ($press in @(@{ name = 'R'; code = 114 }, @{ name = 'Z'; code = 122 })) {
-    Invoke-LabInput @{ id = "079-$($press.name)"; frames = 120; inputFrames = 3; keys = @($press.code); capture = $true } |
+    Invoke-LabInput @{ id = "scp079-$($press.name.ToLower())"; frames = 120; inputFrames = 3; keys = @($press.code); capture = $true } |
         ConvertTo-Json -Depth 6 | Set-Content "$E\press-$($press.name).json" -Encoding utf8
     Invoke-LabScreenshot -Name "scp079-after-$($press.name)" | Out-Null
     Start-Sleep -Seconds 3
