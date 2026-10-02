@@ -46,13 +46,12 @@ public static class AbilityKeys
     private const int FirstSlotLocal = 4;
     private const int ModifierLocal = FirstSlotLocal + SlotCount;
     private const int HelpLocal = 9;
+    private const string GuiRefreshReason = "ability-keys-gui";
 
     private static readonly KeyCode[] SlotSuggestions = { KeyCode.Z, KeyCode.X, KeyCode.T };
     private static readonly List<Lease> Leases = new();
     private static readonly Dictionary<(int PlayerId, AbilityKey Key), Lease> Owners = new();
     private static readonly HashSet<int> ModifierHeld = new();
-    // PlayerIds last sent ability keys that also work inside a native GUI.
-    private static readonly HashSet<int> GuiKeysSent = new();
     private static KeybindBlock? _block;
     private static int _sequence;
 
@@ -100,6 +99,7 @@ public static class AbilityKeys
             collected.ApplyTo(_block);
         }
 
+        if (keysWorkInGui != null) RequestGuiRefreshForAll();
         return lease;
     }
 
@@ -183,16 +183,33 @@ public static class AbilityKeys
         return false;
     }
 
-    // The GUI flag is part of the sent entry, so a role that flips it needs a re-send.
+    private static bool AnyGuiPredicate()
+    {
+        foreach (Lease lease in Leases)
+        {
+            if (lease.KeysWorkInGui != null) return true;
+        }
+
+        return false;
+    }
+
+    // The GUI flag is part of the sent entry and may follow the role, so a role change can need a re-send.
+    // The registry compares the view with the last send and skips an identical one, which also covers a
+    // player whose join send already carried the new role's flag.
     private static void OnChangedRole(PlayerChangedRoleEventArgs ev)
     {
         Player? player = ev.Player;
-        if (player == null || !player.IsReady) return;
-        bool inGui = KeysWorkInGui(player);
-        if (inGui == GuiKeysSent.Contains(player.PlayerId)) return;
-        if (inGui) GuiKeysSent.Add(player.PlayerId);
-        else GuiKeysSent.Remove(player.PlayerId);
-        KeybindRegistry.RequestPlayerRefresh(player, "ability-keys-gui");
+        if (player == null || !player.IsReady || !AnyGuiPredicate()) return;
+        KeybindRegistry.RequestPlayerRefresh(player, GuiRefreshReason);
+    }
+
+    // A GUI predicate arriving or leaving can change the flag for players already holding their role.
+    private static void RequestGuiRefreshForAll()
+    {
+        foreach (Player player in Player.ReadyList)
+        {
+            KeybindRegistry.RequestPlayerRefresh(player, GuiRefreshReason);
+        }
     }
 
     private static void Down(Player player, AbilityKey key)
@@ -228,6 +245,11 @@ public static class AbilityKeys
     {
         if (player == null || !Owners.TryGetValue((player.PlayerId, key), out Lease lease)) return;
         Owners.Remove((player.PlayerId, key));
+        InvokeUp(lease, player, key);
+    }
+
+    private static void InvokeUp(Lease lease, Player player, AbilityKey key)
+    {
         try
         {
             lease.OnUp?.Invoke(player, key);
@@ -262,29 +284,38 @@ public static class AbilityKeys
     // leaving player gets no release, so both settle owed releases here.
     private static void OnDying(PlayerDyingEventArgs ev) => Forget(ev.Player);
 
-    private static void OnLeft(PlayerLeftEventArgs ev)
-    {
-        Forget(ev.Player);
-        if (ev.Player != null) GuiKeysSent.Remove(ev.Player.PlayerId);
-    }
+    private static void OnLeft(PlayerLeftEventArgs ev) => Forget(ev.Player);
 
     private static void OnRoundRestarted()
     {
         Owners.Clear();
         ModifierHeld.Clear();
-        GuiKeysSent.Clear();
+    }
+
+    // Settles every press a departing consumer still holds. Once its ownership is gone, neither the
+    // player's own release nor the registry's forced release (rebuild, role change) can reach it.
+    private static void SettleReleases(Lease lease)
+    {
+        var owed = new List<(int PlayerId, AbilityKey Key)>();
+        foreach (KeyValuePair<(int PlayerId, AbilityKey Key), Lease> pair in Owners)
+        {
+            if (ReferenceEquals(pair.Value, lease)) owed.Add(pair.Key);
+        }
+
+        foreach ((int PlayerId, AbilityKey Key) owned in owed)
+        {
+            // A release handler may itself have settled or reassigned this key.
+            if (!Owners.TryGetValue(owned, out Lease current) || !ReferenceEquals(current, lease)) continue;
+            Owners.Remove(owned);
+            Player? player = Player.Get(owned.PlayerId);
+            if (player != null) InvokeUp(lease, player, owned.Key);
+        }
     }
 
     private static void Release(Lease lease)
     {
         if (!Leases.Remove(lease)) return;
-        var stale = new List<(int, AbilityKey)>();
-        foreach (KeyValuePair<(int PlayerId, AbilityKey Key), Lease> pair in Owners)
-        {
-            if (ReferenceEquals(pair.Value, lease)) stale.Add(pair.Key);
-        }
-
-        foreach ((int, AbilityKey) key in stale) Owners.Remove(key);
+        SettleReleases(lease);
 
         if (Leases.Count == 0 || lease.Extras.Count > 0)
         {
@@ -301,11 +332,11 @@ public static class AbilityKeys
             ServerEvents.RoundRestarted -= OnRoundRestarted;
             Owners.Clear();
             ModifierHeld.Clear();
-            GuiKeysSent.Clear();
             return;
         }
 
         if (_block == null) BuildBlock();
+        if (lease.KeysWorkInGui != null) RequestGuiRefreshForAll();
     }
 
     private sealed class Lease : IDisposable

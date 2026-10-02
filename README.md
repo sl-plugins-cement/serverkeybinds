@@ -215,16 +215,17 @@ IDisposable lease = AbilityKeys.Acquire(
   `AbilityKey`, `onDown` receives whether it is held.
 - **Routing.** A press is offered to consumers by descending `priority`, then acquisition order,
   until one returns true; that consumer receives the matching `onUp`, which is also settled on role
-  change, death and leave. A consumer must return false for players whose current role it does not
-  own; returning true takes the press from the role's real owner. A throwing handler is logged and
-  skipped.
+  change, death, leave and when that consumer's lease is disposed. A consumer must return false for
+  players whose current role it does not own; returning true takes the press from the role's real
+  owner. A throwing handler is logged and skipped.
 - **Extras.** `AbilityKeyExtras` (`Add`, `AddTwoButtons`, `AddTextArea`, `SettingId`) lets a consumer
   keep its own dedicated controls in the same group at ids it already ships. Locals 0, 1, 2, 4, 5, 6,
   7 and 9 belong to the shared keys and are rejected, and two consumers cannot use the same local.
 - **GUI.** `keysWorkInGui` marks players whose role must use the 技能 keys and the modifier while a
   native GUI is open; the SCP-079 camera interface counts as one. Those keys are sent to marked players
-  with `preventInteractionOnGui: false` and to everyone else with `true`; a refresh is requested when the
-  answer changes on role change.
+  with `preventInteractionOnGui: false` and to everyone else with `true`. While any lease has a
+  `keysWorkInGui` predicate, a refresh is requested on each role change, and for every player when such a
+  lease is acquired or disposed; the registry skips the send when the player's view is unchanged.
 - **Helpers.** `SettingId(AbilityKey)`, `SlotIndex(AbilityKey)` (0-based slot, -1 for Primary/Secondary),
   `Slot(int)`, `IsModifierHeld(Player)` and the constants `PrimaryUseId`, `SecondaryUseId`, `FirstSlotId`,
   `ModifierId` and `SlotCount` (3).
