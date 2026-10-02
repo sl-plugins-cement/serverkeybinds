@@ -77,7 +77,7 @@ foreign; see [Foreign settings](#foreign-settings).
 | Base | Constant | Owner |
 | --- | --- | --- |
 | 1060000 | `Scp106` | scp-106 abilities |
-| 1090000 | `Reinforcements` | reinforcements-system SRA deploy |
+| 1090000 | `AbilityKeys` (`Reinforcements` is an alias) | shared ability keys; see [Shared ability keys](#shared-ability-keys) |
 | 1091000 | `ReinforcementsMedic` | reinforcements-system Medic |
 | 1092000 | `SerpentsHand` | reinforcements-system Serpent's Hand |
 | 1100000 | `GocNuke` | goc-nuke (reserved, unused) |
@@ -90,9 +90,9 @@ foreign; see [Foreign settings](#foreign-settings).
 | 1150000 | `Scp5kGanzir` | Ganzir aircraft, jetpack and naval insertion |
 | 1160000 | `CementExamples` | scpsl-plugin-examples teaching code only; never deployed beside a product |
 | 1170000 | `AircraftCarrier` | AircraftCarrier barrage and drone |
-| 1180000 | `Scp999` | SCP-999 Tickle and Jelly bounce |
+| 1180000 | `Scp999` | retired; never reuse |
 | 1200000 | `SpatialSurveyMarkers` | SpatialSurveyMarkers survey mode |
-| 9100000 | `ScpTiers` | ScpTiers ability keybinds; keeps its historical ids as locals 100+ |
+| 9100000 | `ScpTiers` | retired; never reuse |
 | 23000 | `RegistryHeaders` | the registry's own category headers; not claimable |
 | 24000 | `GlobalMusic` | shared plugin music (24001 mute, 24002 volume) |
 | 25000 | `MvpSystem` | MvpSystem music toggle at local 1 |
@@ -103,6 +103,9 @@ foreign; see [Foreign settings](#foreign-settings).
 | 30000 | `PlayerBadge` | badge picker at local 1 |
 | 31000 | `SecretLabNAudioDemo` | SecretLabNAudio.Demo grab-slider keybind at local 1 |
 | 530000 | `CustomizableUi` | CustomizableUIMeow HUD toggles; keeps its historical ids as locals 210+ |
+
+A retired block stays reserved and is never claimed again: the client keeps a player's saved keys
+under the old ids, so a reused id would inherit them.
 
 ## Usage
 
@@ -140,7 +143,11 @@ localised by the consumer.
   the player must click the client's apply-suggestion control. Say so in an `AddTextArea` next to
   the keybinds. Presses are latched per UserId, so a repeated press without a release is ignored;
   role change, registry rebuild and round restart release latches and dispatch the release edge
-  first, so a hold-to-act consumer is never left held.
+  first, so a hold-to-act consumer is never left held. The overload taking
+  `Func<Player?, bool> preventInteractionOnGuiFor` in place of the bool decides the flag per
+  recipient at every personalised send (null for the shared array; a throwing resolver counts as
+  true), for keys some roles must use inside a native GUI. The flag is part of the sent entry, so call
+  `KeybindRegistry.RequestPlayerRefresh` when the answer changes for a player.
 - **`AddDropdown(local, label, options, defaultIndex, hint, onChanged, entryType)`** — the
   callback receives the validated, clamped index.
 - **`AddTwoButtons(local, label, optionA, optionB, defaultIsB, hint, onChanged)`** — the native
@@ -172,6 +179,58 @@ localised by the consumer.
 Per-player entries (`AddDropdownForPlayer`, `AddButtonForPlayer`), validated selections and
 interest-routed refreshes are described in [docs/per-player-entries.md](docs/per-player-entries.md).
 
+## Shared ability keys
+
+`AbilityKeys` is the one set of keys every role shares. A player holds one role at a time, so a small
+set serves every custom SCP and human role, and players bind each key once per server. Native keybinds
+start unassigned, so every extra key is a setup step for new players. The block is
+`SssIdBlocks.AbilityKeys` (1090000; `SssIdBlocks.Reinforcements` is the same value, kept as an alias),
+in `Gameplay` at `Order(-1000)` under the Chinese header "技能按键", with a Chinese help text area at
+local 9.
+
+| Id | Label | Suggested key |
+| --- | --- | --- |
+| 1090001 | 主要使用 | `Mouse0` |
+| 1090002 | 次要使用 | `Mouse1` |
+| 1090004 / 1090005 / 1090006 | 技能 1 / 技能 2 / 技能 3 | `Z` / `X` / `T` |
+| 1090007 | 技能修饰键（按住） | `LeftControl` |
+
+Ids and control types in this block are fixed. The client saves a key as
+`SrvSp_<server>_<typeCode>_<settingId>`, so changing an id or a type discards players' saved
+bindings; label, header and order are not part of that key.
+
+```csharp
+IDisposable lease = AbilityKeys.Acquire(
+    "MyPlugin",
+    onDown: (player, key, modifierHeld) => OwnsRole(player) && Handle(player, key, modifierHeld),
+    onUp: (player, key) => Release(player, key),     // optional
+    extras: extras => extras.Add(3, "喷射背包推进", KeyCode.B, "按住推进。", OnDown, OnUp),   // optional
+    priority: 0,
+    keysWorkInGui: player => player.Role == RoleTypeId.Scp079);   // optional
+// lease.Dispose() in Plugin.Disable
+```
+
+- **Leases.** Acquire one lease per enabled consumer on the game thread and dispose it on disable.
+  `AbilityKey` is `PrimaryUse`, `SecondaryUse`, `Ability1`..`Ability3`; the modifier is not an
+  `AbilityKey`, `onDown` receives whether it is held.
+- **Routing.** A press is offered to consumers by descending `priority`, then acquisition order,
+  until one returns true; that consumer receives the matching `onUp`, which is also settled on role
+  change, death and leave. A consumer must return false for players whose current role it does not
+  own; returning true takes the press from the role's real owner. A throwing handler is logged and
+  skipped.
+- **Extras.** `AbilityKeyExtras` (`Add`, `AddTwoButtons`, `AddTextArea`, `SettingId`) lets a consumer
+  keep its own dedicated controls in the same group at ids it already ships. Locals 0, 1, 2, 4, 5, 6,
+  7 and 9 belong to the shared keys and are rejected, and two consumers cannot use the same local.
+- **GUI.** `keysWorkInGui` marks players whose role must use the 技能 keys and the modifier while a
+  native GUI is open; the SCP-079 camera interface counts as one. Those keys are sent to marked players
+  with `preventInteractionOnGui: false` and to everyone else with `true`; a refresh is requested when the
+  answer changes on role change.
+- **Helpers.** `SettingId(AbilityKey)`, `SlotIndex(AbilityKey)` (0-based slot, -1 for Primary/Secondary),
+  `Slot(int)`, `IsModifierHeld(Player)` and the constants `PrimaryUseId`, `SecondaryUseId`, `FirstSlotId`,
+  `ModifierId` and `SlotCount` (3).
+- **Trace.** With `keybinds trace on`, each press logs `ability key <key> (player <id>) handled by '<owner>'`
+  or `not handled`.
+
 ## Categories and order
 
 Blocks are sorted by `(category, Order, base id)`, so the menu is identical on every server
@@ -189,9 +248,9 @@ visible block emits no header for that player. `InCategory` rejects a value that
 | 100 | `Other` | the fallback for a block that never called `InCategory` |
 
 `Order(int)` sorts within a category, lower first, default 0. Use a negative value to pin the
-settings players reach for most to the top; reinforcements-system pins its ability keybinds at
-`-1000`. `InCategory` and `Order` are presentational and change no setting id, so re-categorising
-never costs a player a saved value.
+settings players reach for most to the top; the shared ability keys pin themselves at `-1000`.
+`InCategory` and `Order` are presentational and change no setting id, so re-categorising never
+costs a player a saved value.
 
 Registry entries are emitted **before** foreign ones. Plugins that merge into `DefinedSettings`
 themselves keep their own relative order and are otherwise untouched.
@@ -325,13 +384,13 @@ packet recipient filtering) and
 
 **安装。** 每台服务器只安装一份，放在该端口 `LabAPI/LabApi-<port>.yml` 加载器实际读取的目录中；SR1 生产服只加载端口目录，因此放 `LabAPI/plugins/7777`，`plugins/global` 与 `dependencies/global` 均不会被读取。放在未读取目录中的副本会被静默忽略，已读取目录中的旧副本会生效。首次 `Enable()` 输出 `[ServerKeybinds] ServerKeybinds <version> (API 6) loaded from <path> sha256 <hash>`；若进程中还加载了第二个 ServerKeybinds 程序集，会额外输出一条错误日志并给出其路径，此时必须删除陈旧或分叉的副本。
 
-**ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–30000、530000 与 9100000 为配置类及已接入的第三方插件，1130000–1132000 为机器人服）。
+**ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–30000 与 530000 为配置类及已接入的第三方插件，1130000–1132000 为机器人服；1090000 为共享能力按键，9100000 与 1180000 已停用，永不复用）。
 
 **外部设置。** 注册表是 `DefinedSettings` 的唯一合法写入者。其他插件绕过注册表写入的设置称为外部设置，由 `KeybindRegistry.ForeignPolicy` 决定处理方式：`Block`（默认）在每次重建及下一次发送时剔除它们，使其永远到不了客户端，并对每个 ID 只记录一次警告，`keybinds foreign` 可列出；`Merge` 保留旧的追加合并行为，仅在服务器必须运行未接入插件时使用。运行时可用 `keybinds foreign block|merge` 切换，切换后立即重建。
 
 **条目类型。** `Header`（分组标题，作为分类标题下的子标题显示）；`AddTextArea`（只读说明，显示在标题下、按键上，客户端不回传）；`Add`（按键：上升沿/下降沿回调；默认键只是 `SuggestedKey` 建议，玩家必须自行采纳，请用说明文本告知；按 UserId 锁存，角色变化、重建与回合重启会先派发释放再清除锁存）；`AddDropdown`（回传经校验的索引）；`AddTwoButtons`（原生开关，选中 B 时回调 `true`；另有按玩家决定初始位置的重载，客户端在获取时也会回报值，请与 `DefaultTwoButtonsFor` 返回的已发送默认值比较；PlayerPrefs 键包含类型码，把下拉改为双按钮会重置玩家已保存的选择）；`AddSlider`（回传裁剪后的值）；`AddButton`（每次点击或完成长按触发一次，无存储值，获取时不触发）；`AddPlaintext`（文本框，获取时同样回报已保存文本或空串）；`AddNative`（兜底：工厂函数收到绝对 ID 与个性化发送的接收者，必须用该 ID 构造条目，回调收到原始响应，注册表只做可见性过滤，不做锁存）。
 
-**分类与顺序。** 区块按（分类、`Order`、基址）排序；每个分类只生成一个 `SSGroupHeader`，ID 为 `RegistryHeaders + (int)category`，对某玩家全部不可见的分类不发送标题。分类：`Gameplay`(0)、`Display`(10)、`Announcements`(20)、`Tools`(30)、`Other`(100，未调用 `InCategory` 的默认归属)。`Order` 负值可置顶（reinforcements-system 的能力按键为 `-1000`）。分类与顺序仅影响展示，不改变任何 ID。注册表条目排在外部条目之前，外部条目保持其相对顺序。分类标题语言由 `KeybindRegistry.Language` 决定（空或 `cn` 为中文，`en` 为英文），全局唯一，后写者生效。
+**分类与顺序。** 区块按（分类、`Order`、基址）排序；每个分类只生成一个 `SSGroupHeader`，ID 为 `RegistryHeaders + (int)category`，对某玩家全部不可见的分类不发送标题。分类：`Gameplay`(0)、`Display`(10)、`Announcements`(20)、`Tools`(30)、`Other`(100，未调用 `InCategory` 的默认归属)。`Order` 负值可置顶（共享能力按键为 `-1000`）。分类与顺序仅影响展示，不改变任何 ID。注册表条目排在外部条目之前，外部条目保持其相对顺序。分类标题语言由 `KeybindRegistry.Language` 决定（空或 `cn` 为中文，`en` 为英文），全局唯一，后写者生效。
 
 **可见性。** `VisibleTo` 限制整个区块：不可见玩家收不到条目，其回传被丢弃；按键进入锁存前先检查可见性；已接受的按下即使随后因角色变化不可见仍会收到释放。可见性只是展示，回调仍须检查物品、角色、冷却与权限。
 
