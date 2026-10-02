@@ -54,8 +54,15 @@ public static class SssIdBlocks
     /// <summary>"SCP Enhacements" / scp-106 wiki abilities (was 1060100-1060106).</summary>
     public const int Scp106 = 1060000;
 
-    /// <summary>reinforcements-system: SRA deploy (was 1090100/01). The plugin owns this block + <see cref="ReinforcementsMedic"/>.</summary>
-    public const int Reinforcements = 1090000;
+    /// <summary>
+    /// The shared ability keys (<see cref="ServerKeybinds.AbilityKeys"/>): Primary/Secondary Use, Ability 1-3 and
+    /// the modifier, plus consumers' dedicated extras. It keeps the ids reinforcements-system shipped here, so
+    /// players' saved keys survive.
+    /// </summary>
+    public const int AbilityKeys = 1090000;
+
+    /// <summary>Former name of <see cref="AbilityKeys"/>; the block is no longer claimed by reinforcements-system.</summary>
+    public const int Reinforcements = AbilityKeys;
 
     /// <summary>reinforcements-system Medic field-heal (was 1090200/01). A separate block so the SRA and Medic services stay independent.</summary>
     public const int ReinforcementsMedic = 1091000;

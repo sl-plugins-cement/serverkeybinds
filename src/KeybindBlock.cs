@@ -136,7 +136,30 @@ public sealed class KeybindBlock
             throw new ArgumentException($"Local id {local} already used in block '{Owner}' ({BaseId}).", nameof(local));
         }
 
-        Bindings[local] = new Binding(local, label, defaultKey, hint, onPressed, onReleased, preventInteractionOnGui, allowSpectatorTrigger);
+        Bindings[local] = new Binding(local, label, defaultKey, hint, onPressed, onReleased, _ => preventInteractionOnGui, allowSpectatorTrigger);
+        KeybindRegistry.OnBlockChanged(this);
+        return this;
+    }
+
+    /// <summary>
+    /// A keybind whose "ignore while a GUI is open" flag is decided per recipient at every personalised send,
+    /// for keys some roles must use inside a native GUI (the SCP-079 camera interface counts as one). The
+    /// resolver receives null for the shared array. The flag only changes on a re-send, so request a refresh
+    /// (<see cref="KeybindRegistry.RequestPlayerRefresh"/>) when its answer changes for a player.
+    /// </summary>
+    public KeybindBlock Add(
+        int local,
+        string label,
+        KeyCode defaultKey,
+        string hint,
+        Action<Player> onPressed,
+        Action<Player>? onReleased,
+        Func<Player?, bool> preventInteractionOnGuiFor,
+        bool allowSpectatorTrigger = false)
+    {
+        if (preventInteractionOnGuiFor == null) throw new ArgumentNullException(nameof(preventInteractionOnGuiFor));
+        ValidateAvailableValueLocal(local);
+        Bindings[local] = new Binding(local, label, defaultKey, hint, onPressed, onReleased, preventInteractionOnGuiFor, allowSpectatorTrigger);
         KeybindRegistry.OnBlockChanged(this);
         return this;
     }
@@ -433,7 +456,7 @@ public sealed class KeybindBlock
                 BaseId + binding.Local,
                 binding.Label,
                 binding.DefaultKey,
-                preventInteractionOnGui: binding.PreventInteractionOnGui,
+                preventInteractionOnGui: binding.PreventInteractionOnGuiFor(player),
                 allowSpectatorTrigger: binding.AllowSpectatorTrigger,
                 hint: binding.Hint);
         }
@@ -536,7 +559,7 @@ public sealed class KeybindBlock
 
     internal sealed class Binding
     {
-        public Binding(int local, string label, KeyCode defaultKey, string hint, Action<Player> onPressed, Action<Player>? onReleased, bool preventInteractionOnGui, bool allowSpectatorTrigger)
+        public Binding(int local, string label, KeyCode defaultKey, string hint, Action<Player> onPressed, Action<Player>? onReleased, Func<Player?, bool> preventInteractionOnGuiFor, bool allowSpectatorTrigger)
         {
             Local = local;
             Label = label;
@@ -544,7 +567,7 @@ public sealed class KeybindBlock
             Hint = hint;
             OnPressed = onPressed;
             OnReleased = onReleased;
-            PreventInteractionOnGui = preventInteractionOnGui;
+            _preventInteractionOnGuiFor = preventInteractionOnGuiFor;
             AllowSpectatorTrigger = allowSpectatorTrigger;
         }
 
@@ -560,7 +583,20 @@ public sealed class KeybindBlock
 
         public Action<Player>? OnReleased { get; }
 
-        public bool PreventInteractionOnGui { get; }
+        private readonly Func<Player?, bool> _preventInteractionOnGuiFor;
+
+        /// <summary>The flag sent to <paramref name="player"/>; true when the resolver throws.</summary>
+        public bool PreventInteractionOnGuiFor(Player? player)
+        {
+            try
+            {
+                return _preventInteractionOnGuiFor(player);
+            }
+            catch
+            {
+                return true;
+            }
+        }
 
         public bool AllowSpectatorTrigger { get; }
     }
