@@ -226,9 +226,9 @@ IDisposable lease = AbilityKeys.Acquire(
   with `preventInteractionOnGui: false` and to everyone else with `true`. While any lease has a
   `keysWorkInGui` predicate, a refresh is requested on each role change, and for every player when such a
   lease is acquired or disposed; the registry skips the send when the player's view is unchanged.
-- **Helpers.** `SettingId(AbilityKey)`, `SlotIndex(AbilityKey)` (0-based slot, -1 for Primary/Secondary),
-  `Slot(int)`, `IsModifierHeld(Player)` and the constants `PrimaryUseId`, `SecondaryUseId`, `FirstSlotId`,
-  `ModifierId` and `SlotCount` (3).
+- **Helpers.** `SettingId(AbilityKey)`, `BlockSettingId(int local)`, `SlotIndex(AbilityKey)` (0-based slot,
+  -1 for Primary/Secondary), `Slot(int)`, `IsModifierHeld(Player)`, the ids `PrimaryUseId`, `SecondaryUseId`,
+  `FirstSlotId` and `ModifierId`, and the constant `SlotCount` (3). Ids include `KeybindRegistry.IdOffset`.
 - **Trace.** With `keybinds trace on`, each press logs `ability key <key> (player <id>) handled by '<owner>'`
   or `not handled`.
 
@@ -278,10 +278,11 @@ The native settings pack is a replace, not an add, so the registry suppresses th
   response, acknowledges a send; an unacknowledged join or refresh send is repeated up to three
   times. The native status version is the version the player accepted in the menu, not a transport
   receipt, so a player who never opened the tab can legitimately stay at version 0.
-- **Reconcile:** every 30 s, each ready player who has had no registry send in the last 30 s gets a
-  paced repair send. It is skipped while an acknowledgement is pending, the settings tab is open,
-  or a key is latched; a latch defers at most one further interval, then is released as stale so a
-  lost key-up cannot stop reconciliation.
+- **Reconcile:** every 30 s, each ready player who has not received any registry send yet (all join
+  attempts failed) gets a paced repair send. A player who already received one is never re-sent
+  periodically, so another plugin's `SendToPlayer` view is left alone. It is skipped while an
+  acknowledgement is pending, the settings tab is open, or a key is latched; a latch defers at most one
+  further interval, then is released as stale.
 - **Rebuild:** every `Enable`, `Disable` or late entry addition re-merges the shared array and
   re-sends to everyone. `KeybindRegistry.RefreshPlayer(player)` re-sends to one player with
   acknowledgement.
@@ -292,20 +293,43 @@ when the player leaves; latches and pending acknowledgements are cleared on roun
 
 ## Foreign settings
 
-The registry is the only sanctioned writer of `ServerSpecificSettingsSync.DefinedSettings`. A
-setting that another plugin writes there without a block is foreign, and
-`KeybindRegistry.ForeignPolicy` decides what happens to it:
+A setting that another plugin writes into `ServerSpecificSettingsSync.DefinedSettings` without a
+block is foreign: any entry the registry did not write itself. `KeybindRegistry.ForeignPolicy`
+decides what happens to it:
 
-- `Block` (default): the entry is stripped from the shared array on every rebuild and on the next
-  send of any kind, so it never reaches a client, and the client's responses for that id fail the
-  game's own prevalidation. Each id is logged once as a warning and listed by `keybinds foreign`.
-- `Merge`: the previous additive behaviour, with registry entries first and foreign entries after
-  in their own order. Use it only while a server must run a plugin that has not been ported.
+- `Merge` (default): foreign entries are kept, after the registry's entries and in
+  their own order, and are included in every personalised send. When a foreign entry uses an id the
+  registry would emit, the foreign entry keeps it: ours is withdrawn from the shared array and every
+  send, client responses for that id are no longer routed to our handlers, and the id is logged once
+  as an error. The next rebuild restores ours if the foreign entry is gone.
+- `Block`: the entry is stripped from the shared array on every rebuild and on the next send of any
+  kind, so only registered blocks reach clients. Use it on a server that wants exclusive control of
+  the menu.
 
-A foreign plugin that calls the native `SendToAll` between two registry sends can still reach
-clients once; the reconcile send replaces that collection within its 30-second window. Set the
-policy from a consumer's config like `Language`, or at runtime with `keybinds foreign block|merge`;
-a change rebuilds immediately.
+A server selects the policy in `LabAPI/configs/<port>/ServerKeybinds/config.yml`, which the registry
+reads when the first block enables (a missing file means `Merge`):
+
+```yaml
+foreign_settings: Block
+```
+
+`keybinds foreign block|merge` switches at runtime and saves that file. A consumer that sets
+`KeybindRegistry.ForeignPolicy` in code overrides the file.
+
+The registry never re-sends over a collection another plugin sent with `SendToPlayer`: its periodic
+repair only reaches ready players who have not received any registry send yet.
+
+`keybinds foreign` prints the policy, the id offset, the foreign entries currently kept, our withdrawn
+ids and any blocked ids.
+
+### Id offset
+
+`KeybindRegistry.IdOffset` (default 0) is added to every block base and to the category header ids,
+so a consumer can move the whole allocation away from ids other plugins use. Set it before the first
+`ClaimBlock`, as a non-negative multiple of 1000 no larger than `MaxIdOffset` (2,000,000,000). After
+that only the current value is accepted; changing it needs a server restart. The `SssIdBlocks`
+constants stay unshifted; use `block.SettingId(local)` for absolute ids. Changing the offset resets
+players' saved values, because the client stores them by id.
 
 ## Diagnostics
 
@@ -322,7 +346,8 @@ a change rebuilds immediately.
     count, reason), pending acknowledgement attempt, pressed latches, the client's accepted
     version and whether the settings tab is open.
   - `keybinds resend <id|name>` — re-pushes the personalised collection to that player.
-  - `keybinds trace on|off`, `keybinds foreign [block|merge]` — toggles `PressTrace` at runtime.
+  - `keybinds trace on|off` toggles `PressTrace`; `keybinds foreign [block|merge]` sets or shows the
+    foreign-settings policy.
 
 ## Shared plugin music
 
@@ -387,7 +412,7 @@ packet recipient filtering) and
 
 **ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–30000 与 530000 为配置类及已接入的第三方插件，1130000–1132000 为机器人服；1090000 为共享能力按键，9100000 与 1180000 已停用，永不复用）。
 
-**外部设置。** 注册表是 `DefinedSettings` 的唯一合法写入者。其他插件绕过注册表写入的设置称为外部设置，由 `KeybindRegistry.ForeignPolicy` 决定处理方式：`Block`（默认）在每次重建及下一次发送时剔除它们，使其永远到不了客户端，并对每个 ID 只记录一次警告，`keybinds foreign` 可列出；`Merge` 保留旧的追加合并行为，仅在服务器必须运行未接入插件时使用。运行时可用 `keybinds foreign block|merge` 切换，切换后立即重建。
+**外部设置。** 默认 `Merge`：保留其他插件写入 `DefinedSettings` 的设置并随每次发送下发；外部设置与本库 ID 冲突时外部设置优先，本库条目撤回并记录一次错误。需要独占菜单的服务器在 `LabAPI/configs/<port>/ServerKeybinds/config.yml` 写入 `foreign_settings: Block`，或用 `keybinds foreign block`（会保存该文件）。定期修复只发给尚未收到过本库发送的玩家，不会覆盖其他插件的 `SendToPlayer`。`KeybindRegistry.IdOffset` 可整体平移本库所有 ID（须在首次 `ClaimBlock` 前设置）。
 
 **条目类型。** `Header`（分组标题，作为分类标题下的子标题显示）；`AddTextArea`（只读说明，显示在标题下、按键上，客户端不回传）；`Add`（按键：上升沿/下降沿回调；默认键只是 `SuggestedKey` 建议，玩家必须自行采纳，请用说明文本告知；按 UserId 锁存，角色变化、重建与回合重启会先派发释放再清除锁存）；`AddDropdown`（回传经校验的索引）；`AddTwoButtons`（原生开关，选中 B 时回调 `true`；另有按玩家决定初始位置的重载，客户端在获取时也会回报值，请与 `DefaultTwoButtonsFor` 返回的已发送默认值比较；PlayerPrefs 键包含类型码，把下拉改为双按钮会重置玩家已保存的选择）；`AddSlider`（回传裁剪后的值）；`AddButton`（每次点击或完成长按触发一次，无存储值，获取时不触发）；`AddPlaintext`（文本框，获取时同样回报已保存文本或空串）；`AddNative`（兜底：工厂函数收到绝对 ID 与个性化发送的接收者，必须用该 ID 构造条目，回调收到原始响应，注册表只做可见性过滤，不做锁存）。
 

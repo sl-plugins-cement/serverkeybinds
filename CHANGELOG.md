@@ -4,19 +4,32 @@ All notable changes to ServerKeybinds. Versions follow the csproj `<Version>`; d
 commit dates on `main`. `KeybindRegistry.ApiVersion` was bumped in lockstep through 6.0.0 and is
 frozen at 6 as a diagnostic since 6.1.0.
 
-## 6.4.0 - 2026-10-02
+## 6.5.0 - 2026-10-02
 
 - `AbilityKeys`: the ability keys every role shares (主要使用, 次要使用, 技能 1-3 and 技能修饰键) in
   block 1090000 under the "技能按键" header at `Order(-1000)`. Consumers (reinforcements-system,
   ScpTiers, SCP999) lease them with `AbilityKeys.Acquire` and claim presses for the roles they own;
   `AbilityKeyExtras` lets a consumer keep its own controls in the group at ids it already ships. The
   block keeps the ids and control types reinforcements-system shipped, so players' saved bindings
-  carry over. `SssIdBlocks.AbilityKeys` is new and `SssIdBlocks.Reinforcements` stays as an alias.
+  carry over. `SssIdBlocks.AbilityKeys` is new and `SssIdBlocks.Reinforcements` stays as an obsolete alias.
 - `KeybindBlock.Add` overload taking `Func<Player?, bool> preventInteractionOnGuiFor`: the "ignore
   while a GUI is open" flag is decided per recipient at each personalised send. SCP-079 uses it to
   keep its ability keys working inside the camera interface.
 - Blocks 9100000 (ScpTiers) and 1180000 (Scp999) are retired: no plugin claims them any more, and
   they stay reserved so a reused id cannot inherit players' old saved keys.
+- `AbilityKeys` ids (`PrimaryUseId`, `SettingId`, `BlockSettingId`, ...) include `KeybindRegistry.IdOffset`.
+
+## 6.4.0 - 2026-10-02
+
+- Foreign settings default to `Merge`, so other plugins' Server-Specific Settings keep working beside
+  the registry. A server that wants exclusive control sets `foreign_settings: Block` in
+  `LabAPI/configs/<port>/ServerKeybinds/config.yml`; `keybinds foreign block|merge` saves that file.
+- A foreign entry that uses one of the registry's ids now keeps it; the registry withdraws its own
+  entry and response routing for that id and logs the collision once, instead of overwriting it.
+- The 30-second reconcile only repairs players who never received a registry send; it no longer
+  re-sends over another plugin's `SendToPlayer` collection.
+- `KeybindRegistry.IdOffset` shifts every block base and category header id; `YieldedSettingIds` and
+  `ForeignSettingsPresent()` expose collision state, also printed by `keybinds foreign`.
 
 ## 6.3.0 - 2026-09-25
 

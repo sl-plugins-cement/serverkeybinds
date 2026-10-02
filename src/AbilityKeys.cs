@@ -35,11 +35,12 @@ public enum AbilityKey
 /// </summary>
 public static class AbilityKeys
 {
-    public const int PrimaryUseId = SssIdBlocks.AbilityKeys + PrimaryLocal;
-    public const int SecondaryUseId = SssIdBlocks.AbilityKeys + SecondaryLocal;
+    // Ids are properties, not constants: they include KeybindRegistry.IdOffset, which a server may set.
+    public static int PrimaryUseId => BlockSettingId(PrimaryLocal);
+    public static int SecondaryUseId => BlockSettingId(SecondaryLocal);
     public const int SlotCount = 3;
-    public const int FirstSlotId = SssIdBlocks.AbilityKeys + FirstSlotLocal;
-    public const int ModifierId = SssIdBlocks.AbilityKeys + ModifierLocal;
+    public static int FirstSlotId => BlockSettingId(FirstSlotLocal);
+    public static int ModifierId => BlockSettingId(ModifierLocal);
 
     private const int PrimaryLocal = 1;
     private const int SecondaryLocal = 2;
@@ -120,6 +121,9 @@ public static class AbilityKeys
         if (index < 0 || index >= SlotCount) throw new ArgumentOutOfRangeException(nameof(index));
         return AbilityKey.Ability1 + index;
     }
+
+    /// <summary>The setting id the client sees for <paramref name="local"/> in the shared block.</summary>
+    public static int BlockSettingId(int local) => KeybindRegistry.IdOffset + SssIdBlocks.AbilityKeys + local;
 
     /// <summary>True while the player holds the ability modifier.</summary>
     public static bool IsModifierHeld(Player? player) => player != null && ModifierHeld.Contains(player.PlayerId);
@@ -389,7 +393,7 @@ public sealed class AbilityKeyExtras
     internal int Count => _entries.Count;
 
     /// <summary>The absolute setting id of <paramref name="local"/> in the shared block.</summary>
-    public int SettingId(int local) => SssIdBlocks.AbilityKeys + local;
+    public int SettingId(int local) => AbilityKeys.BlockSettingId(local);
 
     public AbilityKeyExtras AddTextArea(int local, string content)
     {
