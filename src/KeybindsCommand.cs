@@ -124,13 +124,17 @@ public sealed class KeybindsCommand : ICommand
     private static bool Foreign(ArraySegment<string> arguments, out string response)
     {
         string value = arguments.Count > 1 ? arguments.At(1).Trim().ToLowerInvariant() : string.Empty;
+        bool? saved = null;
+        string savedPath = string.Empty;
         switch (value)
         {
             case "block":
                 KeybindRegistry.ForeignPolicy = ForeignSettingsPolicy.Block;
+                saved = RegistrySettings.TrySaveForeignPolicy(ForeignSettingsPolicy.Block, out savedPath);
                 break;
             case "merge":
                 KeybindRegistry.ForeignPolicy = ForeignSettingsPolicy.Merge;
+                saved = RegistrySettings.TrySaveForeignPolicy(ForeignSettingsPolicy.Merge, out savedPath);
                 break;
             case "":
                 break;
@@ -146,7 +150,13 @@ public sealed class KeybindsCommand : ICommand
                 .Select(pair => $"{pair.Key} ({pair.Value})"));
         string present = Describe(KeybindRegistry.ForeignSettingsPresent());
         string yielded = Describe(KeybindRegistry.YieldedSettingIds);
-        response = $"Foreign settings policy: {KeybindRegistry.ForeignPolicy}. Id offset: {KeybindRegistry.IdOffset}. " +
+        string persistence = saved switch
+        {
+            true => $" Saved to {savedPath}.",
+            false => $" Applied until restart; saving {savedPath} failed.",
+            null => string.Empty,
+        };
+        response = $"Foreign settings policy: {KeybindRegistry.ForeignPolicy}.{persistence} Id offset: {KeybindRegistry.IdOffset}. " +
             $"Foreign entries kept now: {present}. Our ids withdrawn for a foreign entry: {yielded}. " +
             $"Foreign ids blocked this process: {blocked}.";
         return true;

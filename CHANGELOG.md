@@ -4,9 +4,11 @@ All notable changes to ServerKeybinds. Versions follow the csproj `<Version>`; d
 commit dates on `main`. `KeybindRegistry.ApiVersion` was bumped in lockstep through 6.0.0 and is
 frozen at 6 as a diagnostic since 6.1.0.
 
-## 6.3.0-product.1 - 2026-09-28 (product branch only)
+## 6.4.0 - 2026-10-02
 
-- Built for sold plugin bundles, not production. Foreign settings default to `Merge`.
+- Foreign settings default to `Merge`, so other plugins' Server-Specific Settings keep working beside
+  the registry. A server that wants exclusive control sets `foreign_settings: Block` in
+  `LabAPI/configs/<port>/ServerKeybinds/config.yml`; `keybinds foreign block|merge` saves that file.
 - A foreign entry that uses one of the registry's ids now keeps it; the registry withdraws its own
   entry and response routing for that id and logs the collision once, instead of overwriting it.
 - The 30-second reconcile only repairs players who never received a registry send; it no longer

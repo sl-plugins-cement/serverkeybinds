@@ -1,10 +1,5 @@
 # ServerKeybinds
 
-> **Product branch.** This branch builds the ServerKeybinds shipped inside sold plugin bundles. It is a
-> good neighbour on servers we do not run: foreign settings are merged by default, a foreign entry wins
-> an id collision, the reconcile never overwrites another plugin's per-player send, and
-> `KeybindRegistry.IdOffset` can move every id this registry emits. Production servers use `main`.
-
 `ServerKeybinds.dll` is the process-wide owner of SCP:SL Server-Specific Settings (SSS) for
 metarepo plugins. It is a shared library, not a LabAPI plugin: it owns the single additive merge
 into `ServerSpecificSettingsSync.DefinedSettings`, the personalised join send, the menu order,
@@ -242,13 +237,27 @@ A setting that another plugin writes into `ServerSpecificSettingsSync.DefinedSet
 block is foreign: any entry the registry did not write itself. `KeybindRegistry.ForeignPolicy`
 decides what happens to it:
 
-- `Merge` (default on this branch): foreign entries are kept, after the registry's entries and in
+- `Merge` (default): foreign entries are kept, after the registry's entries and in
   their own order, and are included in every personalised send. When a foreign entry uses an id the
   registry would emit, the foreign entry keeps it: ours is withdrawn from the shared array and every
   send, client responses for that id are no longer routed to our handlers, and the id is logged once
   as an error. The next rebuild restores ours if the foreign entry is gone.
 - `Block`: the entry is stripped from the shared array on every rebuild and on the next send of any
-  kind. An operator can select it at runtime with `keybinds foreign block`.
+  kind, so only registered blocks reach clients. Use it on a server that wants exclusive control of
+  the menu.
+
+A server selects the policy in `LabAPI/configs/<port>/ServerKeybinds/config.yml`, which the registry
+reads when the first block enables (a missing file means `Merge`):
+
+```yaml
+foreign_settings: Block
+```
+
+`keybinds foreign block|merge` switches at runtime and saves that file. A consumer that sets
+`KeybindRegistry.ForeignPolicy` in code overrides the file.
+
+The registry never re-sends over a collection another plugin sent with `SendToPlayer`: its periodic
+repair only reaches ready players who have not received any registry send yet.
 
 `keybinds foreign` prints the policy, the id offset, the foreign entries currently kept, our withdrawn
 ids and any blocked ids.
@@ -343,7 +352,7 @@ packet recipient filtering) and
 
 **ID 分配。** 每个使用者占用一个 1000 宽的固定区块，本地 ID 0 为标题，1–999 为条目。`SssIdBlocks` 是登记表，运行时才是强制：`ClaimBlock` 拒绝非 1000 对齐或等于 `RegistryHeaders` 的基址，`Enable()` 在两个区块基址相同时抛出异常。插件可以先带着新的对齐基址发布，并在同一次修改中补上表格行。当前登记见上文表格（1060000 Scp106 … 1200000 SpatialSurveyMarkers，23000 注册表标题，24000 插件音乐，25000–30000、530000 与 9100000 为配置类及已接入的第三方插件，1130000–1132000 为机器人服）。
 
-**外部设置。** 本分支默认 `Merge`：保留其他插件写入 `DefinedSettings` 的设置并随每次发送下发；外部设置与本库 ID 冲突时外部设置优先，本库条目撤回并记录一次错误。`Block` 可用 `keybinds foreign block` 选择。`KeybindRegistry.IdOffset` 可整体平移本库所有 ID（须在首次 `ClaimBlock` 前设置）。
+**外部设置。** 默认 `Merge`：保留其他插件写入 `DefinedSettings` 的设置并随每次发送下发；外部设置与本库 ID 冲突时外部设置优先，本库条目撤回并记录一次错误。需要独占菜单的服务器在 `LabAPI/configs/<port>/ServerKeybinds/config.yml` 写入 `foreign_settings: Block`，或用 `keybinds foreign block`（会保存该文件）。定期修复只发给尚未收到过本库发送的玩家，不会覆盖其他插件的 `SendToPlayer`。`KeybindRegistry.IdOffset` 可整体平移本库所有 ID（须在首次 `ClaimBlock` 前设置）。
 
 **条目类型。** `Header`（分组标题，作为分类标题下的子标题显示）；`AddTextArea`（只读说明，显示在标题下、按键上，客户端不回传）；`Add`（按键：上升沿/下降沿回调；默认键只是 `SuggestedKey` 建议，玩家必须自行采纳，请用说明文本告知；按 UserId 锁存，角色变化、重建与回合重启会先派发释放再清除锁存）；`AddDropdown`（回传经校验的索引）；`AddTwoButtons`（原生开关，选中 B 时回调 `true`；另有按玩家决定初始位置的重载，客户端在获取时也会回报值，请与 `DefaultTwoButtonsFor` 返回的已发送默认值比较；PlayerPrefs 键包含类型码，把下拉改为双按钮会重置玩家已保存的选择）；`AddSlider`（回传裁剪后的值）；`AddButton`（每次点击或完成长按触发一次，无存储值，获取时不触发）；`AddPlaintext`（文本框，获取时同样回报已保存文本或空串）；`AddNative`（兜底：工厂函数收到绝对 ID 与个性化发送的接收者，必须用该 ID 构造条目，回调收到原始响应，注册表只做可见性过滤，不做锁存）。
 

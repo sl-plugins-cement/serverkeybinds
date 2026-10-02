@@ -14,7 +14,7 @@ namespace ServerKeybinds;
 /// coordinator owns join readiness retries, acknowledgement retries, and a low-frequency repair send for
 /// a ready player who has not received any registry send yet (every join attempt failed).
 ///
-/// This product build does not re-send to players who already received a collection. Another plugin's
+/// It does not re-send to players who already received a collection. Another plugin's
 /// <c>SendToPlayer</c> replaces the client's whole collection, and on a shared server that per-player view
 /// is that plugin's to manage; re-sending ours every interval would overwrite it.
 /// </summary>

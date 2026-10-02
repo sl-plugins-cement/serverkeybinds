@@ -78,17 +78,20 @@ public static class KeybindRegistry
 
     /// <summary>
     /// What happens to settings that other code writes into <c>DefinedSettings</c> without registering a
-    /// block. This product build defaults to <see cref="ForeignSettingsPolicy.Merge"/>: it ships onto servers
-    /// whose other plugins append their own settings, so their entries are kept (after ours, in their own
+    /// block. The default, <see cref="ForeignSettingsPolicy.Merge"/>, keeps them (after ours, in their own
     /// order), and a foreign entry whose id collides with one of ours wins while our entry is withdrawn.
     /// <see cref="ForeignSettingsPolicy.Block"/> strips foreign entries from the shared array and from every
-    /// send; an operator may still select it with <c>keybinds foreign block</c>.
+    /// send. A server selects it with <c>foreign_settings: Block</c> in
+    /// <c>LabAPI/configs/&lt;port&gt;/ServerKeybinds/config.yml</c>, read when the first block enables, or with
+    /// <c>keybinds foreign block</c>, which saves that file. Setting this property in code takes precedence
+    /// over the file.
     /// </summary>
     public static ForeignSettingsPolicy ForeignPolicy
     {
         get => _foreignPolicy;
         set
         {
+            _foreignPolicyResolved = true;
             if (_foreignPolicy == value)
             {
                 return;
@@ -168,6 +171,7 @@ public static class KeybindRegistry
     private static readonly HashSet<ServerSpecificSettingBase> Emitted = new(ReferenceComparer.Instance);
 
     private static ForeignSettingsPolicy _foreignPolicy = ForeignSettingsPolicy.Merge;
+    private static bool _foreignPolicyResolved;
     private static readonly Dictionary<int, string> BlockedForeign = new();
 
     private static readonly Dictionary<int, KeybindBlock> Blocks = new();
@@ -1017,6 +1021,12 @@ public static class KeybindRegistry
         }
 
         _subscribed = true;
+        if (!_foreignPolicyResolved)
+        {
+            _foreignPolicy = RegistrySettings.LoadForeignPolicy();
+            _foreignPolicyResolved = true;
+        }
+
         LogAssemblyIdentityOnce();
         _previousJoinFilter = ServerSpecificSettingsSync.SendOnJoinFilter;
         ServerSpecificSettingsSync.SendOnJoinFilter = SuppressNativeJoinSend;
@@ -1350,7 +1360,7 @@ public static class KeybindRegistry
             // the module version id is a per-compilation GUID that still identifies the exact build.
             Logger.Info(
                 $"[ServerKeybinds] {selfName.Name} {selfName.Version} (API {ApiVersion}) loaded from {location}" +
-                $"{HashSuffix(location)} mvid {ModuleIdOf(self)}; product build, foreign settings {_foreignPolicy}, id offset {_idOffset}.");
+                $"{HashSuffix(location)} mvid {ModuleIdOf(self)}; foreign settings {_foreignPolicy}, id offset {_idOffset}.");
 
             foreach (Assembly other in AppDomain.CurrentDomain.GetAssemblies())
             {
