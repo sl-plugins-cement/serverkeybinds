@@ -65,6 +65,9 @@ public sealed class SssRefreshCoordinator<TKey, TSnapshot> where TKey : notnull
     private readonly Dictionary<TKey, PlayerState> _players;
     private readonly Dictionary<TKey, PendingRefresh> _pending;
 
+    private readonly List<TKey> _duePlayers = new();
+    private bool _processing;
+
     private long _requested;
     private long _sent;
     private long _coalesced;
@@ -121,18 +124,37 @@ public sealed class SssRefreshCoordinator<TKey, TSnapshot> where TKey : notnull
     }
 
     /// <summary>Processes every due player once and returns seconds until the next candidate, or null.</summary>
-    public double? ProcessDue()
+    public double? ProcessDue() => ProcessDue(int.MaxValue);
+
+    /// <summary>Processes at most this many due candidates; a remaining due candidate returns zero delay.</summary>
+    public double? ProcessDue(int maximumCandidates)
     {
+        if (maximumCandidates <= 0) throw new ArgumentOutOfRangeException(nameof(maximumCandidates));
         double now = _now();
-        foreach (TKey player in _pending.Keys.ToArray())
+        // Consumer callbacks can request/remove players. Snapshot keys without allocating every wake-up;
+        // nested processing must not overwrite the outer pass's scratch buffer.
+        if (_processing) return NextDelay(now);
+        _processing = true;
+        try
         {
-            if (_pending.TryGetValue(player, out PendingRefresh? pending) && pending != null && pending.DueSeconds <= now)
+            foreach (KeyValuePair<TKey, PendingRefresh> pair in _pending)
             {
-                ProcessOne(player, pending, now);
+                if (pair.Value.DueSeconds > now) continue;
+                _duePlayers.Add(pair.Key);
+                if (_duePlayers.Count >= maximumCandidates) break;
+            }
+            foreach (TKey player in _duePlayers)
+            {
+                if (_pending.TryGetValue(player, out PendingRefresh? pending) && pending != null && pending.DueSeconds <= now)
+                    ProcessOne(player, pending, now);
             }
         }
-
-        return NextDelay(now);
+        finally
+        {
+            _duePlayers.Clear();
+            _processing = false;
+        }
+        return NextDelay(_now());
     }
 
     public double? SecondsUntilNextProcess() => NextDelay(_now());
@@ -172,14 +194,6 @@ public sealed class SssRefreshCoordinator<TKey, TSnapshot> where TKey : notnull
     {
         PlayerState state = GetOrCreateState(player);
         Prune(state, now);
-        string fingerprint = _fingerprint(pending.Snapshot) ?? string.Empty;
-        if (state.HasSent && string.Equals(state.LastFingerprint, fingerprint, StringComparison.Ordinal))
-        {
-            _identical++;
-            _pending.Remove(player);
-            return;
-        }
-
         double earliest = pending.DueSeconds;
         if (state.HasSent)
         {
@@ -199,6 +213,14 @@ public sealed class SssRefreshCoordinator<TKey, TSnapshot> where TKey : notnull
                 pending.RateLimitCounted = true;
                 _rateLimited++;
             }
+            return;
+        }
+
+        string fingerprint = _fingerprint(pending.Snapshot) ?? string.Empty;
+        if (state.HasSent && string.Equals(state.LastFingerprint, fingerprint, StringComparison.Ordinal))
+        {
+            _identical++;
+            _pending.Remove(player);
             return;
         }
 
@@ -255,7 +277,8 @@ public sealed class SssRefreshCoordinator<TKey, TSnapshot> where TKey : notnull
             return null;
         }
 
-        double due = _pending.Values.Min(value => value.DueSeconds);
+        double due = double.MaxValue;
+        foreach (PendingRefresh pending in _pending.Values) due = Math.Min(due, pending.DueSeconds);
         return Math.Max(0, due - now);
     }
 

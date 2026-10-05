@@ -199,10 +199,10 @@ public static class KeybindRegistry
 
     /// <summary>
     /// The debounced, coalesced, rate-limited refresh budget, keyed by UserId. Its snapshot is the Player
-    /// itself: the view is built and fingerprinted when a candidate is processed, and the actual send goes
+    /// wrapped in a lazy view: settings are built and fingerprinted only when eligible, and the send goes
     /// through <see cref="Delivery"/> like every other send, which records itself here.
     /// </summary>
-    private static readonly SssRefreshCoordinator<string, Player> RefreshCoordinator = new(
+    private static readonly SssRefreshCoordinator<string, RefreshView> RefreshCoordinator = new(
         () => RefreshClock.Elapsed.TotalSeconds,
         FingerprintFor,
         SendCoordinatedRefresh,
@@ -343,21 +343,8 @@ public static class KeybindRegistry
     /// plugins happened to load in. One category header is emitted the first time that category appears, and
     /// a category with no included block emits nothing.
     /// </summary>
-    /// <param name="recordSent">
-    /// True only on the build that is actually sent to <paramref name="player"/>: records the two-button
-    /// defaults and personalised dropdown option lists they receive. A diagnostic or fingerprint build
-    /// passes false so it cannot overwrite the record of what is on the player's screen.
-    /// </param>
-    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include, Player? player, bool recordSent)
+    private static IEnumerable<ServerSpecificSettingBase> BuildOrdered(Func<KeybindBlock, bool> include, Player? player)
     {
-        string userId = player?.UserId ?? string.Empty;
-        PersonalizedDropdownLedger? ledger = null;
-        if (recordSent && player != null && !string.IsNullOrWhiteSpace(userId))
-        {
-            ledger = LedgerFor(userId);
-            ledger.StartGeneration();
-        }
-
         SettingsCategory? current = null;
         foreach (KeybindBlock block in Blocks.Values
                      .Where(include)
@@ -380,20 +367,6 @@ public static class KeybindRegistry
                 if (Yielded.ContainsKey(setting.SettingId))
                 {
                     continue;
-                }
-
-                if (ledger != null)
-                {
-                    if (setting is SSTwoButtonsSetting twoButtons)
-                    {
-                        RecordSentDefault(userId, twoButtons.SettingId, twoButtons.DefaultIsB);
-                    }
-                    else if (setting is SSDropdownSetting dropdown
-                        && block.ValueSettings.TryGetValue(dropdown.SettingId - block.BaseId, out KeybindBlock.ValueSetting owner)
-                        && owner is KeybindBlock.PersonalizedDropdownSetting)
-                    {
-                        ledger.Record(dropdown.SettingId, dropdown.Options);
-                    }
                 }
 
                 yield return setting;
@@ -480,7 +453,7 @@ public static class KeybindRegistry
             }
         }
 
-        List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active, player: null, recordSent: false).ToList();
+        List<ServerSpecificSettingBase> ours = BuildOrdered(block => block.Active, player: null).ToList();
         Emitted.Clear();
         Emitted.UnionWith(ours);
 
@@ -566,7 +539,7 @@ public static class KeybindRegistry
         }
 
         EnsureTracked(player.UserId);
-        RefreshCoordinator.Request(player.UserId, player, reason);
+        RefreshCoordinator.Request(player.UserId, new RefreshView(player), reason);
         ScheduleRefreshPump();
     }
 
@@ -693,7 +666,7 @@ public static class KeybindRegistry
     /// right now. Same build as <see cref="SendPersonalizedNow"/> (per-player entries may hide themselves,
     /// so the recipient matters) but without recording, so the record of what was ACTUALLY sent survives.
     /// </summary>
-    internal static int PersonalizedEntryCountFor(Player player) => BuildCollection(player, recordSent: false).Count;
+    internal static int PersonalizedEntryCountFor(Player player) => BuildCollection(player).Count;
 
     private static void SendPersonalizedToAll()
     {
@@ -713,7 +686,11 @@ public static class KeybindRegistry
     /// </summary>
     private static int SendPersonalizedNow(Player player, string reason)
     {
-        List<ServerSpecificSettingBase> collection = BuildCollection(player, recordSent: true);
+        return SendPersonalizedNow(player, reason, BuildCollection(player), fingerprint: null);
+    }
+
+    private static int SendPersonalizedNow(Player player, string reason, List<ServerSpecificSettingBase> collection, string? fingerprint)
+    {
         ServerSpecificSettingsSync.SendToPlayer(
             player.ReferenceHub,
             collection.ToArray(),
@@ -723,12 +700,27 @@ public static class KeybindRegistry
         if (!string.IsNullOrWhiteSpace(userId))
         {
             EnsureTracked(userId);
-            RefreshCoordinator.RecordSent(userId, SssViewFingerprint.Compute(collection));
+            RecordDeliveredView(userId, collection);
+            RefreshCoordinator.RecordSent(userId, fingerprint ?? SssViewFingerprint.Compute(collection));
         }
 
         // LabAPI's Logger.Debug is NOT globally gated - always pass the flag or this spams every send.
-        Logger.Debug($"[ServerKeybinds] Sent {collection.Count} entries to {player.Nickname} ({player.PlayerId}) [{reason}].", Debug);
+        if (Debug) Logger.Debug($"[ServerKeybinds] Sent {collection.Count} entries to {player.Nickname} ({player.PlayerId}) [{reason}].", Debug);
         return collection.Count;
+    }
+
+    private static void RecordDeliveredView(string userId, List<ServerSpecificSettingBase> collection)
+    {
+        PersonalizedDropdownLedger ledger = LedgerFor(userId);
+        ledger.StartGeneration();
+        foreach (ServerSpecificSettingBase setting in collection)
+        {
+            if (Yielded.ContainsKey(setting.SettingId) || !ActiveValueSettings.TryGetValue(setting.SettingId, out ActiveValueSetting owner)) continue;
+            if (setting is SSTwoButtonsSetting twoButtons)
+                RecordSentDefault(userId, setting.SettingId, twoButtons.DefaultIsB);
+            else if (setting is SSDropdownSetting dropdown && owner.Setting is KeybindBlock.PersonalizedDropdownSetting)
+                ledger.Record(setting.SettingId, dropdown.Options);
+        }
     }
 
     private static HashSet<int> AllOwnedIds()
@@ -746,14 +738,14 @@ public static class KeybindRegistry
     }
 
     /// <summary>The full collection <paramref name="player"/> receives: ours, ordered per recipient, then foreign entries.</summary>
-    private static List<ServerSpecificSettingBase> BuildCollection(Player player, bool recordSent)
+    private static List<ServerSpecificSettingBase> BuildCollection(Player player)
     {
         HashSet<int> allOwnedIds = AllOwnedIds();
 
         // Ordered per RECIPIENT, not once globally: a category whose only block is hidden from this player
         // must not leave a dangling header behind for them. Ours lead here too, matching Rebuild.
         List<ServerSpecificSettingBase> collection =
-            BuildOrdered(block => block.Active && block.IsVisibleTo(player), player, recordSent).ToList();
+            BuildOrdered(block => block.Active && block.IsVisibleTo(player), player).ToList();
         if (_foreignPolicy == ForeignSettingsPolicy.Block)
         {
             // A plugin that wrote into DefinedSettings after our last Rebuild is caught here, on the next
@@ -861,9 +853,10 @@ public static class KeybindRegistry
         }
     }
 
-    /// <summary>The refresh coordinator's fingerprint of the view <paramref name="player"/> would receive now.</summary>
-    private static string FingerprintFor(Player player)
+    /// <summary>The refresh coordinator's fingerprint of the view <paramref name="view"/> would deliver now.</summary>
+    private static string FingerprintFor(RefreshView view)
     {
+        Player player = view.Player;
         if (player == null || player.IsDestroyed || !player.IsPlayer || !player.IsReady)
         {
             return string.Empty;
@@ -871,7 +864,8 @@ public static class KeybindRegistry
 
         try
         {
-            return SssViewFingerprint.Compute(BuildCollection(player, recordSent: false));
+            view.Collection = BuildCollection(player);
+            return view.Fingerprint = SssViewFingerprint.Compute(view.Collection);
         }
         catch (Exception exception)
         {
@@ -882,8 +876,9 @@ public static class KeybindRegistry
         }
     }
 
-    private static bool SendCoordinatedRefresh(string userId, Player player, IReadOnlyCollection<string> reasons)
+    private static bool SendCoordinatedRefresh(string userId, RefreshView view, IReadOnlyCollection<string> reasons)
     {
+        Player player = view.Player;
         if (player == null || !string.Equals(player.UserId, userId, StringComparison.Ordinal))
         {
             return false;
@@ -891,7 +886,16 @@ public static class KeybindRegistry
 
         // The delivery coordinator refuses players who cannot be sent to and audits the send like any
         // other; SendPersonalizedNow records it in the refresh budget with the fingerprint that went out.
-        return Delivery.Send(player, "refresh:" + string.Join("+", reasons), requireAcknowledgement: false);
+        string reason = "refresh:" + string.Join("+", reasons);
+        try
+        {
+            return Delivery.Send(player, reason, requireAcknowledgement: false,
+                preparedSend: view.Collection == null ? null : () => SendPersonalizedNow(player, reason, view.Collection, view.Fingerprint));
+        }
+        finally
+        {
+            view.Collection = null;
+        }
     }
 
     /// <summary>
@@ -929,9 +933,19 @@ public static class KeybindRegistry
                 return;
             }
 
-            RefreshCoordinator.ProcessDue();
+            RefreshCoordinator.ProcessDue(maximumCandidates: 2);
             ScheduleRefreshPump();
         });
+    }
+
+    // A view survives only a queued request; it is resolved at processing time and consumed synchronously.
+    // Never retain settings across frames: consumer factories may depend on changing player/round state.
+    private sealed class RefreshView
+    {
+        public RefreshView(Player player) => Player = player;
+        public readonly Player Player;
+        public List<ServerSpecificSettingBase>? Collection;
+        public string? Fingerprint;
     }
 
     private static void EnsureTracked(string userId)

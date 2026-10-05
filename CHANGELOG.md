@@ -4,6 +4,15 @@ All notable changes to ServerKeybinds. Versions follow the csproj `<Version>`; d
 commit dates on `main`. `KeybindRegistry.ApiVersion` was bumped in lockstep through 6.0.0 and is
 frozen at 6 as a diagnostic since 6.1.0.
 
+## 6.5.1 - 2026-10-05
+
+- Pace coordinated refresh bursts to two candidates per wake-up; preserve the existing debounce,
+  per-player send limits and latest-view resolution.
+- Skip settings construction while a refresh is rate-limited and send the same prepared collection
+  used for fingerprinting, avoiding a second settings build/hash. Record dropdown/default state only
+  for the delivered collection.
+- Reuse refresh candidate storage instead of allocating a pending-player array on every pass.
+
 ## 6.5.0 - 2026-10-02
 
 - `AbilityKeys`: the ability keys every role shares (主要使用, 次要使用, 技能 1-3 and 技能修饰键) in

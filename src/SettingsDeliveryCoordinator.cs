@@ -98,7 +98,7 @@ internal sealed class SettingsDeliveryCoordinator
         _scheduledJoins.Clear();
     }
 
-    public bool Send(Player player, string reason, bool requireAcknowledgement)
+    public bool Send(Player player, string reason, bool requireAcknowledgement, Func<int>? preparedSend = null)
     {
         if (!CanSend(player))
         {
@@ -106,7 +106,7 @@ internal sealed class SettingsDeliveryCoordinator
         }
 
         string userId = player.UserId;
-        if (!TrySend(player, reason, out int count))
+        if (!TrySend(player, reason, out int count, preparedSend))
         {
             return false;
         }
@@ -343,12 +343,12 @@ internal sealed class SettingsDeliveryCoordinator
         }
     }
 
-    private bool TrySend(Player player, string reason, out int count)
+    private bool TrySend(Player player, string reason, out int count, Func<int>? preparedSend = null)
     {
         count = 0;
         try
         {
-            count = _send(player, reason);
+            count = preparedSend == null ? _send(player, reason) : preparedSend();
             return true;
         }
         catch (Exception exception)

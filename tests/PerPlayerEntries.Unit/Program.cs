@@ -16,6 +16,9 @@ internal static class Program
             ("idle_time_does_not_create_work", IdleTimeDoesNotCreateWork),
             ("send_path_that_records_itself_is_not_double_counted", SendPathThatRecordsItselfIsNotDoubleCounted),
             ("out_of_band_send_drops_pending_and_counts_against_budget", OutOfBandSendDropsPendingAndCountsAgainstBudget),
+            ("rate_limited_view_is_not_built_until_eligible", RateLimitedViewIsNotBuiltUntilEligible),
+            ("burst_is_bounded_and_every_player_drains", BurstIsBoundedAndEveryPlayerDrains),
+            ("callbacks_can_mutate_pending_without_corrupting_batch", CallbacksCanMutatePending),
             // Interest index.
             ("personal_interest_never_fans_out", PersonalInterestNeverFansOut),
             ("population_boundaries_route_only_intersection", PopulationBoundariesRouteOnlyIntersection),
@@ -209,7 +212,10 @@ internal static class Program
         clock.Advance(0.5);
         sut.ProcessDue();
         Equal(1, sends, "view identical to the actual send is skipped");
-        Equal(1L, sut.Counters.IdenticalSnapshots, "identical counter");
+        Equal(0L, sut.Counters.IdenticalSnapshots, "rate-limited view has not been evaluated");
+        clock.Advance(1.5);
+        sut.ProcessDue();
+        Equal(1L, sut.Counters.IdenticalSnapshots, "identical counter after eligibility");
     }
 
     private static void OutOfBandSendDropsPendingAndCountsAgainstBudget()
@@ -233,6 +239,71 @@ internal static class Program
         clock.Advance(1.5);
         sut.ProcessDue();
         Equal(1, sent.Count, "sent once the spacing elapsed");
+    }
+
+    private static void RateLimitedViewIsNotBuiltUntilEligible()
+    {
+        FakeClock clock = new();
+        int builds = 0;
+        string live = "before";
+        string delivered = "";
+        SssRefreshCoordinator<int, int> sut = new(() => clock.Now,
+            _ => { builds++; return live; }, (_, _, _) => { delivered = live; return true; });
+        sut.RecordSent(1, "before");
+        sut.Request(1, 1, "changed");
+        clock.Set(0.5);
+        sut.ProcessDue(2);
+        Equal(0, builds, "blocked candidate allocates no view");
+        live = "latest";
+        clock.Set(2);
+        sut.ProcessDue(2);
+        Equal(1, builds, "eligible candidate resolves once");
+        Equal("latest", delivered, "no stale view from rate-limited attempt");
+    }
+
+    private static void BurstIsBoundedAndEveryPlayerDrains()
+    {
+        FakeClock clock = new();
+        List<Sent> sent = new();
+        var sut = Coordinator(clock, sent);
+        for (int i = 0; i < 35; i++) sut.Request(i, "player-" + i, "burst");
+        clock.Set(0.5);
+        for (int tick = 0; tick < 18; tick++)
+        {
+            int before = sent.Count;
+            double? delay = sut.ProcessDue(2);
+            True(sent.Count - before <= 2, "at most two builds/sends per wake-up");
+            if (tick < 17) Equal(0.0, delay, "remaining due players request continuation");
+        }
+        Equal(35, sent.Count, "all players receive their view");
+        Equal(35, sent.Select(x => x.Snapshot).Distinct().Count(), "each player sent exactly once");
+        Equal(0, sut.PendingCount, "burst drains fully");
+    }
+
+    private static void CallbacksCanMutatePending()
+    {
+        FakeClock clock = new();
+        List<int> sent = new();
+        SssRefreshCoordinator<int, string>? sut = null;
+        sut = new(() => clock.Now, x => x, (player, _, _) =>
+        {
+            sent.Add(player);
+            if (player == 1)
+            {
+                sut!.Remove(2);
+                sut.Request(3, "new", "callback");
+                sut.ProcessDue(2); // A nested consumer callback must not corrupt the outer scratch list.
+            }
+            return true;
+        });
+        sut.Request(1, "first", "burst");
+        sut.Request(2, "removed", "burst");
+        clock.Set(0.5);
+        sut.ProcessDue(2);
+        SequenceEqual(new[] { 1 }, sent, "removed pending player is not sent");
+        clock.Set(1.0);
+        sut.ProcessDue(2);
+        SequenceEqual(new[] { 1, 3 }, sent, "callback-added player observes debounce");
     }
 
     private static void PersonalInterestNeverFansOut()
