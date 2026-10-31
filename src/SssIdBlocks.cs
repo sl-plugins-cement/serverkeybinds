@@ -112,6 +112,9 @@ public static class SssIdBlocks
     /// <summary>SCP proximity voice hold modifier, separate from concurrent role abilities.</summary>
     public const int ScpProximityVoice = 1210000;
 
+    /// <summary>KillEffects sponsor effect picker.</summary>
+    public const int KillEffects = 1220000;
+
     // --- The registry's own reserved block ---
 
     /// <summary>
