@@ -20,20 +20,19 @@ keybinds uses this registry.
   minor is bumped for additions, the major is reserved for a break the contract forbids. Reserving a
   block in `SssIdBlocks` is table data: it needs no version bump, changelog entry or redeploy.
 - New native entry types are covered without a library change through `AddNative` (below).
-- Consumers build the library from source through a `ProjectReference`, using exactly this
-  convention so a checkout beside the consumer or three levels up is found automatically and any
-  other layout is passed explicitly:
+- Consumers build the library from source through a `ProjectReference`. The metarepo's shared
+  build props supply `ServerKeybindsProject` (see the metarepo's
+  [build dependencies](../docs/local-test-environment.md#build-dependencies)); `-p:ServerKeybindsProject=<path>`
+  overrides it:
 
 ```xml
-  <PropertyGroup>
-    <ServerKeybindsProject Condition="'$(ServerKeybindsProject)' == '' And Exists('$(MSBuildThisFileDirectory)..\ServerKeybinds\ServerKeybinds.csproj')">$(MSBuildThisFileDirectory)..\ServerKeybinds\ServerKeybinds.csproj</ServerKeybindsProject>
-    <ServerKeybindsProject Condition="'$(ServerKeybindsProject)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\ServerKeybinds\ServerKeybinds.csproj')">$(MSBuildThisFileDirectory)..\..\..\ServerKeybinds\ServerKeybinds.csproj</ServerKeybindsProject>
-  </PropertyGroup>
+  <Import Project="$(SCPSL_METAREPO)\build\scpsl-deps.props" Condition="'$(SCPSL_METAREPO)' != '' And Exists('$(SCPSL_METAREPO)\build\scpsl-deps.props')" />
+  <!-- ...the consumer's own properties and references... -->
   <ItemGroup>
     <ProjectReference Include="$(ServerKeybindsProject)" Private="false" />
   </ItemGroup>
   <Target Name="RequireServerKeybindsProject" BeforeTargets="BeforeBuild" Condition="!Exists('$(ServerKeybindsProject)')">
-    <Error Text="ServerKeybinds.csproj not found. Pass -p:ServerKeybindsProject=&lt;path&gt;." />
+    <Error Text="ServerKeybinds.csproj not found. Set SCPSL_METAREPO to the metarepo checkout, or pass -p:ServerKeybindsProject=&lt;path&gt;." />
   </Target>
 ```
 

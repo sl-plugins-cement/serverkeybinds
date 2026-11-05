@@ -1,10 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="$(SCPSL_METAREPO)\build\scpsl-deps.props" Condition="'$(SCPSL_METAREPO)' != '' And Exists('$(SCPSL_METAREPO)\build\scpsl-deps.props')" />
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AssemblyName>MusicPreferences.Live</AssemblyName>
-    <Managed>C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</Managed>
+    <SCP_SL_MANAGED Condition="'$(SCP_SL_MANAGED)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SCP Secret Laboratory Dedicated Server\SCPSL_Data\Managed</SCP_SL_MANAGED>
+    <Managed>$(SCP_SL_MANAGED)</Managed>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../ServerKeybinds.csproj" Private="false" />
