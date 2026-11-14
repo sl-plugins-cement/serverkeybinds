@@ -33,6 +33,7 @@ internal static class ConsoleBindFallback
     internal const float ToggleLimitSeconds = 30f;
     private const float HintDelaySeconds = 20f;
     private const float LobbyRetrySeconds = 5f;
+    private const double RoundSettleSeconds = 12d;
 
     // Per (UserId, setting id): the token of the press whose scheduled release is still owed.
     private static readonly Dictionary<(string UserId, int SettingId), int> PendingRelease = new();
@@ -248,9 +249,10 @@ internal static class ConsoleBindFallback
         }
 
         Player? player = Player.Get(userId);
-        if (player?.ReferenceHub != null && !Round.IsRoundStarted)
+        if (player?.ReferenceHub != null && (!Round.IsRoundStarted || Round.Duration.TotalSeconds < RoundSettleSeconds))
         {
-            // The lobby's own controls sit in the bottom region; ask once the round is under way.
+            // The lobby's own controls and the native role intro both sit where the notice goes; ask once the
+            // round is under way and the intro has faded.
             Timing.CallDelayed(LobbyRetrySeconds, () => CheckSettingsTab(userId, generation));
             return;
         }

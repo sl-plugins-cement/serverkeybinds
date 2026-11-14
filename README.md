@@ -374,7 +374,7 @@ native client console instead. Remove `src/ConsoleBind`, its two hooks in `Keybi
   press, then release 0.15 s later. `tap`/`toggle` overrides the choice. The registry's own releases
   (role change, death, rebuild) still apply.
 - **Join notice.** A player whose client has not reported a settings version (0) 20 s after joining
-  (checked once the round has started, so it never covers the lobby controls),
+  (checked once the round has run 12 s, so it never covers the lobby controls or the role intro),
   and who has at least one visible keybind, gets one console line and, once per server session, a
   bottom-region HsmAdapter notice pointing at `.binds`; the server log records it. The notice needs
   HsmAdapter at build time (`-p:HsmAdapterProject=`; without it only the console line is sent) and at
