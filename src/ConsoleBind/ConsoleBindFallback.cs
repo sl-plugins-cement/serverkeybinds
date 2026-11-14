@@ -32,6 +32,7 @@ internal static class ConsoleBindFallback
     internal const float TapReleaseSeconds = 0.15f;
     internal const float ToggleLimitSeconds = 30f;
     private const float HintDelaySeconds = 20f;
+    private const float LobbyRetrySeconds = 5f;
 
     // Per (UserId, setting id): the token of the press whose scheduled release is still owed.
     private static readonly Dictionary<(string UserId, int SettingId), int> PendingRelease = new();
@@ -236,7 +237,8 @@ internal static class ConsoleBindFallback
 
     /// <summary>
     /// A client with the tab reports its settings version right after the join send; version 0 this long
-    /// after joining means it never will, so point the player at <c>.binds</c> once per server session.
+    /// after joining means it never will, so point the player at <c>.binds</c> once per server session,
+    /// after the round has started.
     /// </summary>
     private static void CheckSettingsTab(string userId, int generation)
     {
@@ -246,6 +248,13 @@ internal static class ConsoleBindFallback
         }
 
         Player? player = Player.Get(userId);
+        if (player?.ReferenceHub != null && !Round.IsRoundStarted)
+        {
+            // The lobby's own controls sit in the bottom region; ask once the round is under way.
+            Timing.CallDelayed(LobbyRetrySeconds, () => CheckSettingsTab(userId, generation));
+            return;
+        }
+
         if (player?.ReferenceHub == null || !player.IsReady ||
             ServerSpecificSettingsSync.GetUserVersion(player.ReferenceHub) != 0 ||
             KeybindRegistry.ConsoleKeybindsFor(player).Count == 0)
