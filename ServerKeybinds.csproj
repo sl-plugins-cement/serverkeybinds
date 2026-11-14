@@ -39,6 +39,15 @@
     <Reference Include="Unity.TextMeshPro" HintPath="$(SCP_SL_MANAGED)\Unity.TextMeshPro.dll" Private="false" />
   </ItemGroup>
 
+  <!-- 15.0 split the game across more assemblies; inert on 14.2.x references, which have no Northwood.SCPSL.dll. -->
+  <ItemGroup Condition="'$(ScpslDepsImported)' != 'true' And Exists('$(SCP_SL_MANAGED)\Northwood.SCPSL.dll')">
+    <Reference Include="Northwood.SCPSL" HintPath="$(SCP_SL_MANAGED)\Northwood.SCPSL.dll" Private="false" />
+    <Reference Include="Northwood.Versioning" HintPath="$(SCP_SL_MANAGED)\Northwood.Versioning.dll" Private="false" />
+    <Reference Include="DigitalDust" HintPath="$(SCP_SL_MANAGED)\DigitalDust.dll" Private="false" />
+    <Reference Include="LiteNetLib4Mirror" HintPath="$(SCP_SL_MANAGED)\LiteNetLib4Mirror.dll" Private="false" />
+    <Reference Include="Utf8Json" HintPath="$(SCP_SL_MANAGED)\Utf8Json.dll" Private="false" />
+  </ItemGroup>
+
   <!-- Auto-deploy the built DLL over its existing copies on the local LabAPI server (see Deploy.targets). -->
   <PropertyGroup>
     <_DeployTargetsFile>$([MSBuild]::GetPathOfFileAbove('Deploy.targets', '$(MSBuildProjectDirectory)'))</_DeployTargetsFile>
