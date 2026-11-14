@@ -39,7 +39,7 @@ namespace ServerKeybinds;
 /// shared. A plugin that hard-references it but is missing the DLL fails to load entirely rather than
 /// running half-broken.
 /// </summary>
-public static class KeybindRegistry
+public static partial class KeybindRegistry
 {
     /// <summary>
     /// Diagnostic level of the contract, frozen at 6. It appears in the startup log so a deployed DLL can be
@@ -1049,6 +1049,7 @@ public static class KeybindRegistry
         RoundRestart.OnRestartTriggered += OnRoundRestart;
         ReferenceHub.OnPlayerRemoved += OnPlayerRemoved;
         Delivery.Start();
+        ConsoleBindFallback.Start();
 
         if (!_commandRegistered)
         {
@@ -1086,6 +1087,7 @@ public static class KeybindRegistry
         RoundRestart.OnRestartTriggered -= OnRoundRestart;
         ReferenceHub.OnPlayerRemoved -= OnPlayerRemoved;
         Delivery.Stop();
+        ConsoleBindFallback.Stop();
         Pressed.Clear();
         SentTwoButtonDefaults.Clear();
         SentPersonalizedDropdowns.Clear();
@@ -1192,6 +1194,16 @@ public static class KeybindRegistry
         }
 
         Delivery.AcknowledgeInput(hub);
+        ApplyKeyEdge(hub, userId, setting.SettingId, activeBinding, keybind.SyncIsPressed);
+    }
+
+    /// <summary>
+    /// The latch and dispatch for one keybind edge, shared by the wire path and the temporary console-bind
+    /// path so an injected press reaches consumers exactly as a settings-tab press does. Returns true when an
+    /// edge was dispatched (false for a duplicate press or a release with no latch).
+    /// </summary>
+    private static bool ApplyKeyEdge(ReferenceHub hub, string userId, int settingId, ActiveBinding activeBinding, bool isPressed)
+    {
         if (!Pressed.TryGetValue(userId, out HashSet<int> pressed))
         {
             pressed = new HashSet<int>();
@@ -1200,41 +1212,43 @@ public static class KeybindRegistry
 
         // Fires on both press and release. Act on the rising edge (press) and, for bindings that want it,
         // the falling edge (release) - so a handler can implement hold-to-act behavior.
-        if (!keybind.SyncIsPressed)
+        if (!isPressed)
         {
-            if (pressed.Remove(setting.SettingId))
+            if (pressed.Remove(settingId))
             {
                 if (PressTrace)
                 {
-                    Logger.Debug($"[ServerKeybinds] Trace: release for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+                    Logger.Debug($"[ServerKeybinds] Trace: release for id {settingId} (player {hub.PlayerId}).", PressTrace);
                 }
                 Invoke(activeBinding, hub, released: true);
+                return true;
             }
             else
             {
                 if (PressTrace)
                 {
-                    Logger.Debug($"[ServerKeybinds] Trace: release with no latch for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+                    Logger.Debug($"[ServerKeybinds] Trace: release with no latch for id {settingId} (player {hub.PlayerId}).", PressTrace);
                 }
             }
 
-            return;
+            return false;
         }
 
-        if (!pressed.Add(setting.SettingId))
+        if (!pressed.Add(settingId))
         {
             if (PressTrace)
             {
-                Logger.Debug($"[ServerKeybinds] Trace: press already latched (ignored) for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+                Logger.Debug($"[ServerKeybinds] Trace: press already latched (ignored) for id {settingId} (player {hub.PlayerId}).", PressTrace);
             }
-            return;
+            return false;
         }
 
         if (PressTrace)
         {
-            Logger.Debug($"[ServerKeybinds] Trace: press latched for id {setting.SettingId} (player {hub.PlayerId}).", PressTrace);
+            Logger.Debug($"[ServerKeybinds] Trace: press latched for id {settingId} (player {hub.PlayerId}).", PressTrace);
         }
         Invoke(activeBinding, hub, released: false);
+        return true;
     }
 
     private static void Invoke(ActiveBinding active, ReferenceHub hub, bool released, bool requireVisibility = true)

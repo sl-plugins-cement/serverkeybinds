@@ -4,6 +4,13 @@ All notable changes to ServerKeybinds. Versions follow the csproj `<Version>`; d
 commit dates on `main`. `KeybindRegistry.ApiVersion` was bumped in lockstep through 6.0.0 and is
 frozen at 6 as a diagnostic since 6.1.0.
 
+## Unreleased (port-15)
+
+- Temporary console-bind fallback for the 15.0 beta client, which has no Server-Specific Settings
+  tab: player console commands `.binds` and `.kb <name> [tap|toggle]`, a one-time join notice for
+  clients that never report a settings version, and the `console_bind_fallback` config key (default
+  on). No public API change. See README "Console-bind fallback".
+
 ## 6.5.1 - 2026-10-05
 
 - Pace coordinated refresh bursts to two candidates per wake-up; preserve the existing debounce,

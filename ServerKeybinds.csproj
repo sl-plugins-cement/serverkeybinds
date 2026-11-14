@@ -48,6 +48,19 @@
     <Reference Include="Utf8Json" HintPath="$(SCP_SL_MANAGED)\Utf8Json.dll" Private="false" />
   </ItemGroup>
 
+  <!-- TEMPORARY (15.0 beta console-bind fallback): the one-time "use .binds" notice goes through HsmAdapter.
+       Optional, because most consumers build this library without passing HsmAdapter: without it the notice
+       is compiled out and only the console line is sent. Remove with src/ConsoleBind. -->
+  <ItemGroup Condition="'$(HsmAdapterProject)' != '' And Exists('$(HsmAdapterProject)')">
+    <ProjectReference Include="$(HsmAdapterProject)" Private="false" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(HsmAdapterProject)' != '' And Exists('$(HsmAdapterProject)')">
+    <DefineConstants>$(DefineConstants);SKB_HSM</DefineConstants>
+  </PropertyGroup>
+  <Target Name="ReportConsoleBindHint" BeforeTargets="BeforeBuild" Condition="'$(HsmAdapterProject)' == '' Or !Exists('$(HsmAdapterProject)')">
+    <Message Importance="high" Text="ServerKeybinds: HsmAdapterProject not set; the console-bind join notice is compiled out (console line only)." />
+  </Target>
+
   <!-- Auto-deploy the built DLL over its existing copies on the local LabAPI server (see Deploy.targets). -->
   <PropertyGroup>
     <_DeployTargetsFile>$([MSBuild]::GetPathOfFileAbove('Deploy.targets', '$(MSBuildProjectDirectory)'))</_DeployTargetsFile>
