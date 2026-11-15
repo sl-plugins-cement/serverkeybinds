@@ -352,6 +352,39 @@ players' saved values, because the client stores them by id.
   - `keybinds trace on|off` toggles `PressTrace`; `keybinds foreign [block|merge]` sets or shows the
     foreign-settings policy.
 
+## Console-bind fallback (temporary, 15.0 beta)
+
+**Temporary.** The 15.0 beta client receives the settings pack but has no Server-Specific Settings
+tab, so its players cannot assign any keybind. Until 15.0 ships the tab, players bind keys through the
+native client console instead. Remove `src/ConsoleBind`, its two hooks in `KeybindRegistry`, the
+`console_bind_fallback` key and this section once it does.
+
+- **`.binds`** lists the keybinds the player would see in the tab right now (active, visible blocks, in
+  menu order) under their block headers, each with the exact native line using its suggested key, for
+  example `cmdbind Z .kb 1    技能 1`. `KeyCode.None` suggestions print `<按键>`.
+- **`.kb <name> [tap|toggle]`** is one key press. Names: `p`, `s`, `1`-`3` and `m` for the shared
+  ability keys (主要使用, 次要使用, 技能 1-3, 技能修饰键), the absolute setting id for every other key.
+  The press goes through the registry's normal latch and dispatch, so consumers receive it exactly like
+  a settings-tab press. It is not a delivery acknowledgement. A press is refused while spectating
+  unless the keybind allows spectator triggers, as the client does.
+- **Hold handling.** The native console binding fires once on key down and never reports the release,
+  so holding cannot be reproduced. A key whose label contains 按住 or "hold", or whose hint starts with
+  按住 (技能修饰键, tank driving, Serpent's Hand proximity voice), toggles: the first `.kb` presses, the
+  next one releases, and a toggled press is released after 30 s at the latest. Every other key taps:
+  press, then release 0.15 s later. `tap`/`toggle` overrides the choice. The registry's own releases
+  (role change, death, rebuild) still apply.
+- **Join notice.** A player whose client has not reported a settings version (0) 20 s after joining
+  (checked once the round has run 12 s, so it never covers the lobby controls or the role intro),
+  and who has at least one visible keybind, gets one console line and, once per server session, a
+  bottom-region HsmAdapter notice pointing at `.binds`; the server log records it. The notice needs
+  HsmAdapter at build time (`-p:HsmAdapterProject=`; without it only the console line is sent) and at
+  runtime.
+- **Switch.** `console_bind_fallback: false` in `LabAPI/configs/<port>/ServerKeybinds/config.yml`
+  turns it off (default on). `keybinds foreign` keeps the key when it rewrites that file.
+
+The native console has its own limits: a bound key fires while typing in the console or chat, and a
+mouse button bound this way (主要使用 suggests `Mouse0`) sends a command on every click.
+
 ## Shared plugin music
 
 Players use **Announcements → Plugin music** to control music from ReinforcementsSystem,
