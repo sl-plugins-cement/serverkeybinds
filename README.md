@@ -95,6 +95,7 @@ foreign; see [Foreign settings](#foreign-settings).
 | 1200000 | `SpatialSurveyMarkers` | SpatialSurveyMarkers survey mode |
 | 1210000 | `ScpProximityVoice` | SCP proximity voice hold modifier |
 | 1220000 | `KillEffects` | KillEffects sponsor effect picker |
+| 1230000 | `EmoteSystem` | EmoteSystem emote wheel, standing face and wheel slots |
 | 9100000 | `ScpTiers` | retired; never reuse |
 | 23000 | `RegistryHeaders` | the registry's own category headers; not claimable |
 | 24000 | `GlobalMusic` | shared plugin music (24001 mute, 24002 volume) |

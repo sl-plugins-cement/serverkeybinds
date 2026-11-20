@@ -115,6 +115,9 @@ public static class SssIdBlocks
     /// <summary>KillEffects sponsor effect picker.</summary>
     public const int KillEffects = 1220000;
 
+    /// <summary>EmoteSystem emote wheel key, standing face and wheel slot pickers.</summary>
+    public const int EmoteSystem = 1230000;
+
     // --- The registry's own reserved block ---
 
     /// <summary>
