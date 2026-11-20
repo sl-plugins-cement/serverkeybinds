@@ -372,12 +372,9 @@ native client console instead. Remove `src/ConsoleBind`, its two hooks in `Keybi
   next one releases, and a toggled press is released after 30 s at the latest. Every other key taps:
   press, then release 0.15 s later. `tap`/`toggle` overrides the choice. The registry's own releases
   (role change, death, rebuild) still apply.
-- **Join notice.** A player whose client has not reported a settings version (0) 20 s after joining
-  (checked once the round has run 12 s, so it never covers the lobby controls or the role intro),
-  and who has at least one visible keybind, gets one console line and, once per server session, a
-  bottom-region HsmAdapter notice pointing at `.binds`; the server log records it. The notice needs
-  HsmAdapter at build time (`-p:HsmAdapterProject=`; without it only the console line is sent) and at
-  runtime.
+- **Console reminder.** A player whose client has not reported a settings version (0) 20 s after joining
+  (checked once the round has run 12 s), and who has at least one visible keybind, gets one line pointing
+  at `.binds` in the player console per server session. The server log records it.
 - **Switch.** `console_bind_fallback: false` in `LabAPI/configs/<port>/ServerKeybinds/config.yml`
   turns it off (default on). `keybinds foreign` keeps the key when it rewrites that file.
 
