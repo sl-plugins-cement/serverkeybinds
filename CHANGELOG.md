@@ -6,8 +6,9 @@ frozen at 6 as a diagnostic since 6.1.0.
 
 ## Unreleased (port-15)
 
+- Move the on-screen console-bind reminder to the player console only so cinematic HUDs stay readable.
 - Temporary console-bind fallback for the 15.0 beta client, which has no Server-Specific Settings
-  tab: player console commands `.binds` and `.kb <name> [tap|toggle]`, a one-time join notice for
+  tab: player console commands `.binds` and `.kb <name> [tap|toggle]`, a one-time console reminder for
   clients that never report a settings version, and the `console_bind_fallback` config key (default
   on). No public API change. See README "Console-bind fallback".
 

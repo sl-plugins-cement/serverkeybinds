@@ -23,7 +23,7 @@ internal static class RegistrySettings
         "# TEMPORARY for the 15.0 beta client, which has no Server-Specific Settings tab: players bind\n" +
         "# keybinds through the native console (.binds / .kb). true (default) or false.\n";
 
-    /// <summary>Whether the temporary console-bind fallback (<c>.kb</c>, <c>.binds</c>, join hint) is on.</summary>
+    /// <summary>Whether the temporary console-bind fallback (<c>.kb</c>, <c>.binds</c>, console reminder) is on.</summary>
     public static bool LoadConsoleBindFallback()
     {
         string? value = ReadValue(ConsoleBindKey);

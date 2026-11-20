@@ -82,7 +82,6 @@ internal static class ConsoleBindFallback
         _generation++;
         PlayerEvents.Joined -= OnJoined;
         PendingRelease.Clear();
-        ConsoleBindHint.Dispose();
     }
 
     /// <summary>
@@ -238,7 +237,7 @@ internal static class ConsoleBindFallback
 
     /// <summary>
     /// A client with the tab reports its settings version right after the join send; version 0 this long
-    /// after joining means it never will, so point the player at <c>.binds</c> once per server session,
+    /// after joining means it never will, so point the player at <c>.binds</c> in the console once per server session,
     /// after the round has started.
     /// </summary>
     private static void CheckSettingsTab(string userId, int generation)
@@ -251,8 +250,7 @@ internal static class ConsoleBindFallback
         Player? player = Player.Get(userId);
         if (player?.ReferenceHub != null && (!Round.IsRoundStarted || Round.Duration.TotalSeconds < RoundSettleSeconds))
         {
-            // The lobby's own controls and the native role intro both sit where the notice goes; ask once the
-            // round is under way and the intro has faded.
+            // Wait until the round starts and the player's role-specific bindings are available.
             Timing.CallDelayed(LobbyRetrySeconds, () => CheckSettingsTab(userId, generation));
             return;
         }
@@ -269,19 +267,8 @@ internal static class ConsoleBindFallback
             "本服的技能按键需要绑定后才能使用。你的客户端没有「服务器专属设置」页，请输入 .binds 查看控制台绑定命令。",
             "yellow");
 
-        string shown;
-        try
-        {
-            shown = ConsoleBindHint.TryShow(player) ? "hint shown" : "hint unavailable";
-        }
-        catch (Exception exception)
-        {
-            // HsmAdapter missing at runtime (or built without it): the console line above still went out.
-            shown = $"hint unavailable ({exception.GetType().Name})";
-        }
-
         Logger.Info($"[ServerKeybinds] {player.Nickname} ({player.PlayerId}) never reported a settings tab " +
-            $"(version 0 after {HintDelaySeconds:0} s); pointed them at .binds: {shown}.");
+            $"(version 0 after {HintDelaySeconds:0} s); pointed them at .binds in the player console.");
     }
 
     private static bool TryGetPlayer(ICommandSender sender, out Player player, out string response)
